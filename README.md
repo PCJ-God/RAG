@@ -11,7 +11,7 @@
 
 - ✅ **多格式文档解析**: 支持PDF(DashScope文档智能)/Markdown/DOCX
 - ✅ **多种分块策略**: Sentence/SentenceWindow/Semantic/Markdown/Token，支持对比评测
-- ✅ **智能检索优化**: Query Rewriting、MultiStepQuery分解、HyDE假设文档检索
+- ✅ **智能检索优化**: Query Rewriting(LLM问题扩展)、MultiStepQuery分解、HyDE假设文档检索
 - ✅ **重排序增强**: 先粗排top-20，再用Rerank模型精排top-3
 - ✅ **标签过滤**: 从文档/问题中提取结构化标签(人名/部门/职位)+向量混合检索
 - ✅ **多轮对话**: CondenseQuestionChatEngine，支持上下文感知对话
