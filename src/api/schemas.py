@@ -72,3 +72,21 @@ class SessionInfo(BaseModel):
     """会话信息"""
     session_id: str
     message_count: int
+
+
+class PromptCoachRequest(BaseModel):
+    """提示词教练请求"""
+    prompt: str = Field(..., description="待优化的提示词", min_length=1)
+    mode: str = Field("fixed", description="模式: 'fixed'=固定迭代, 'auto'=AI裁判驱动")
+    iterations: int = Field(1, ge=1, le=10, description="固定迭代次数（mode=fixed时使用）")
+    max_iterations: int = Field(5, ge=1, le=10, description="AI裁判模式最大迭代次数（mode=auto时使用）")
+
+
+class PromptCoachResponse(BaseModel):
+    """提示词教练响应"""
+    original_prompt: str
+    analysis: str
+    optimized_prompt: str
+    iterations: int
+    mode: str = "fixed"
+    judge_verdict: Optional[str] = None  # "通过" / "不通过"（仅 mode=auto 时有值）
