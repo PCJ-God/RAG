@@ -37,16 +37,16 @@ def main():
     choice = input("\n请选择 (1-5, 默认1): ").strip()
     
     if choice == '2':
-        splitter = SplitterFactory.create_window()
+        splitter = SplitterFactory.create('window')
     elif choice == '3':
         print("⚠️ Semantic分块需要embed_model，请使用默认分块")
-        splitter = SplitterFactory.create_sentence(CHUNK_SIZE, CHUNK_OVERLAP)
+        splitter = SplitterFactory.create('sentence', chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
     elif choice == '4':
-        splitter = SplitterFactory.create_markdown()
+        splitter = SplitterFactory.create('markdown')
     elif choice == '5':
-        splitter = SplitterFactory.create_token(100, 20)
+        splitter = SplitterFactory.create('token', chunk_size=100, chunk_overlap=20)
     else:
-        splitter = SplitterFactory.create_sentence(CHUNK_SIZE, CHUNK_OVERLAP)
+        splitter = SplitterFactory.create('sentence', chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
     
     # 分块
     print("\n正在分块...")
