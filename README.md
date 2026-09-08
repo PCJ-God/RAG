@@ -15,6 +15,7 @@
 - ✅ **重排序增强**: 先粗排top-20，再用Rerank模型精排top-3
 - ✅ **标签过滤**: 从文档/问题中提取结构化标签(人名/部门/职位)+向量混合检索
 - ✅ **多轮对话**: CondenseQuestionChatEngine，支持上下文感知对话
+- ✅ **Meta Prompting**: 让大模型成为提示词教练，自动分析并优化提示词质量
 - ✅ **自动化评测**: 集成Ragas框架，量化评估Answer Correctness/Context Recall/Context Precision
 - ✅ **流式输出**: 提升用户体验，减少等待时间
 - ✅ **模块化架构**: 分块策略/Embedding模型/Rerank模型/LLM均可通过配置切换
@@ -34,7 +35,11 @@
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐           │
 │  │  多轮对话引擎  │  │  查询优化器   │  │  答案生成器   │           │
 │  │ (CondenseQ)  │  │ (Rewrite/HyDE)│  │ (LLM+Prompt) │           │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘           │
+│  └──────────────┘  └──────────────┘  └──────┬───────┘           │
+│                       ┌──────────────┐       │                    │
+│                       │ Meta Prompting│      │                    │
+│                       │ (Prompt Coach)│◄─────┘                    │
+│                       └──────────────┘                            │
 └─────────┼────────────────┼────────────────┼────────────────────┘
           │                │                │
 ┌─────────┼────────────────┼────────────────┼────────────────────┐
@@ -170,6 +175,47 @@ print(response1)
 # 第二轮（自动理解"他"指代张伟）
 response2 = chat_engine.chat("他的联系方式是什么？")
 print(response2)
+```
+
+### Meta Prompting 提示词教练
+
+参考 ACP 教程 2_3 节 4.7 "让大模型帮你打造专属 AI 裁判"。
+
+```python
+from src.generation.prompt_coach import PromptCoach
+
+coach = PromptCoach()
+
+# 模式 1: 固定迭代（人为指定次数）
+result = coach.coach("你是一个客服，回答问题要简短")
+
+# 模式 2: AI 裁判驱动（自动判断何时停止）
+result = coach.coach_auto("你是一个客服，回答问题要简短")
+print(result['judge_verdict'])   # "通过" / "不通过"
+print(result['iterations'])      # 实际迭代次数
+print(result['optimized_prompt']) # 优化后的 Prompt
+```
+
+**CLI 交互模式：**
+```bash
+# 固定迭代
+python scripts/meta_prompting.py --prompt "你是一个客服" --iterations 3
+
+# AI 裁判驱动（自动停止）
+python scripts/meta_prompting.py --prompt "你是一个客服" --auto --max-iterations 5
+```
+
+**API 调用：**
+```bash
+# 固定迭代
+curl -X POST http://localhost:8000/prompt-coach \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "你是一个客服", "mode": "fixed", "iterations": 2}'
+
+# AI 裁判驱动
+curl -X POST http://localhost:8000/prompt-coach \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "你是一个客服", "mode": "auto", "max_iterations": 5}'
 ```
 
 ### 分块策略对比
