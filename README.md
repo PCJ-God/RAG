@@ -212,9 +212,9 @@ compare_splitter_strategies(
 
 本项目基于[阿里云大模型ACP认证课程](https://edu.aliyun.com/course/3130200)开发，如果你想深入学习，可以参考：
 
-- [C2_构造问答系统](../大模型ACP认证教程/C2_构造问答系统/) - RAG原理与实践
-- [C3_构建Agent系统](../大模型ACP认证教程/C3_构建Agent系统/) - Agent设计与开发
-- [C4_交付上线](../大模型ACP认证教程/C4_交付上线/) - 模型优化与上线
+- [C2_构造问答系统](https://edu.aliyun.com/course/3130200/?spm=5176.40615594.J_ZPkBgKtTYq68YQ8A0zB1K.4.f671559ciKx6w2) - RAG原理与实践
+- [C3_构建Agent系统](https://edu.aliyun.com/course/3130200/?spm=5176.40615594.J_ZPkBgKtTYq68YQ8A0zB1K.4.f671559ciKx6w2) - Agent设计与开发
+- [C4_交付上线](https://edu.aliyun.com/course/3130200/?spm=5176.40615594.J_ZPkBgKtTYq68YQ8A0zB1K.4.f671559ciKx6w2) - 模型优化与上线
 
 ## 🤝 贡献指南
 
