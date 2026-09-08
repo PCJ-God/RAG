@@ -30,7 +30,7 @@ class DocumentLoader:
             required_exts=self.required_exts
         ).load_data()
         
-        print(f"✅ 成功加载 {len(documents)} 个文档")
+        print(f"[OK] 成功加载 {len(documents)} 个文档")
         return documents
     
     def load_single(self, file_path: str) -> List:
