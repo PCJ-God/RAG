@@ -30,6 +30,7 @@ knowledge_base/
 data/docs/*.pdf
 data/docs/*.docx
 data/*.csv
+data/*.json
 
 # Jupyter Notebook
 .ipynb_checkpoints
