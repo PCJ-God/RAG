@@ -29,8 +29,10 @@ from src.api.schemas import (
     QueryRequest, QueryResponse,
     ChatRequest, ChatResponse,
     RetrieverRequest, RetrieverResponse,
-    HealthResponse, SessionInfo, ContextNode
+    HealthResponse, SessionInfo, ContextNode,
+    PromptCoachRequest, PromptCoachResponse
 )
+from src.generation.prompt_coach import PromptCoach
 
 
 # ============ 全局状态 ============
@@ -347,6 +349,50 @@ async def retrieve(req: RetrieverRequest):
                 for n in nodes
             ]
         )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/prompt-coach", response_model=PromptCoachResponse)
+async def prompt_coach(req: PromptCoachRequest):
+    """
+    Meta Prompting - 提示词教练
+    支持两种模式：
+      - mode='fixed': 固定迭代次数
+      - mode='auto': AI 裁判驱动，自动判断何时停止
+    """
+    try:
+        coach = PromptCoach()
+
+        if req.mode == "auto":
+            # AI 裁判驱动模式
+            result = coach.coach_auto(
+                req.prompt,
+                max_iterations=req.max_iterations
+            )
+            return PromptCoachResponse(
+                original_prompt=result['original_prompt'],
+                analysis=result['analysis'],
+                optimized_prompt=result['optimized_prompt'],
+                iterations=result['iterations'],
+                mode="auto",
+                judge_verdict=result['judge_verdict']
+            )
+        else:
+            # 固定迭代模式
+            current_prompt = req.prompt
+            analysis = ""
+            for _ in range(req.iterations):
+                analysis = coach.analyze(current_prompt)
+                current_prompt = coach.optimize(current_prompt, analysis)
+
+            return PromptCoachResponse(
+                original_prompt=req.prompt,
+                analysis=analysis,
+                optimized_prompt=current_prompt,
+                iterations=req.iterations,
+                mode="fixed"
+            )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
