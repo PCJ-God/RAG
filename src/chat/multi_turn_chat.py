@@ -4,7 +4,7 @@
 """
 from llama_index.core import PromptTemplate
 from llama_index.core.llms import ChatMessage, MessageRole
-from llama_index.core.chat_engine import CondenseQuestionChatEngine
+from llama_index.core.chat_engine import CondenseQuestionChatEngine as LICondenseQuestionChatEngine
 
 
 class CondenseQuestionChatEngine:
@@ -46,7 +46,7 @@ class CondenseQuestionChatEngine:
         """创建CondenseQuestionChatEngine"""
         custom_prompt = PromptTemplate(self.prompt)
         
-        return CondenseQuestionChatEngine.from_defaults(
+        return LICondenseQuestionChatEngine.from_defaults(
             query_engine=self.query_engine,
             condense_question_prompt=custom_prompt,
             chat_history=self.chat_history,
