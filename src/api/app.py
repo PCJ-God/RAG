@@ -83,6 +83,7 @@ class RAGState:
         self.index_loaded = True
 
     def get_retriever(self, use_rerank: bool = False, use_hyde: bool = False,
+                      use_query_expand: bool = False, use_multistep: bool = False,
                       top_k: int = None) -> Retriever:
         """获取（或临时创建）一个带指定策略的 retriever"""
         if top_k is None:
@@ -91,6 +92,8 @@ class RAGState:
         # 如果请求的策略和全局一致，直接用
         if (use_rerank == self.retriever.use_rerank and
                 use_hyde == self.retriever.use_hyde and
+                use_query_expand == self.retriever.use_query_expand and
+                use_multistep == self.retriever.use_multistep and
                 top_k == SIMILARITY_TOP_K):
             return self.retriever
 
@@ -100,6 +103,10 @@ class RAGState:
             retriever.enable_rerank(llm_client=self.llm_client)
         if use_hyde:
             retriever.enable_hyde()
+        if use_query_expand:
+            retriever.enable_query_expand()
+        if use_multistep:
+            retriever.enable_multistep()
         retriever.create_query_engine(llm=self.llm_client.get_llm())
         return retriever
 
@@ -161,6 +168,10 @@ async def health():
             strategy.append("rerank")
         if state.retriever.use_hyde:
             strategy.append("hyde")
+        if state.retriever.use_query_expand:
+            strategy.append("query_expand")
+        if state.retriever.use_multistep:
+            strategy.append("multistep")
     return HealthResponse(
         status="ok",
         index_loaded=state.index_loaded,
@@ -179,6 +190,8 @@ async def query(req: QueryRequest):
         retriever = state.get_retriever(
             use_rerank=req.use_rerank,
             use_hyde=req.use_hyde,
+            use_query_expand=req.use_query_expand,
+            use_multistep=req.use_multistep,
             top_k=req.top_k
         )
 
@@ -192,6 +205,10 @@ async def query(req: QueryRequest):
             strategy_parts.append("rerank")
         if req.use_hyde:
             strategy_parts.append("hyde")
+        if req.use_query_expand:
+            strategy_parts.append("query_expand")
+        if req.use_multistep:
+            strategy_parts.append("multistep")
         strategy = "+".join(strategy_parts) if strategy_parts else "baseline"
 
         return QueryResponse(
@@ -337,6 +354,8 @@ async def retrieve(req: RetrieverRequest):
         retriever = state.get_retriever(
             use_rerank=req.use_rerank,
             use_hyde=req.use_hyde,
+            use_query_expand=req.use_query_expand,
+            use_multistep=req.use_multistep,
             top_k=req.top_k
         )
 
