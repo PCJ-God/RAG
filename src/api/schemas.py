@@ -12,6 +12,8 @@ class QueryRequest(BaseModel):
     question: str = Field(..., description="用户问题", min_length=1)
     use_rerank: bool = Field(False, description="是否启用 Rerank")
     use_hyde: bool = Field(False, description="是否启用 HyDE")
+    use_query_expand: bool = Field(False, description="是否启用 LLM 问题扩展")
+    use_multistep: bool = Field(False, description="是否启用多步骤查询分解")
     top_k: int = Field(5, ge=1, le=20, description="检索 top_k")
 
 
@@ -29,6 +31,8 @@ class RetrieverRequest(BaseModel):
     top_k: int = Field(5, ge=1, le=20, description="检索 top_k")
     use_rerank: bool = Field(False, description="是否启用 Rerank")
     use_hyde: bool = Field(False, description="是否启用 HyDE")
+    use_query_expand: bool = Field(False, description="是否启用 LLM 问题扩展")
+    use_multistep: bool = Field(False, description="是否启用多步骤查询分解")
 
 
 # ============ 响应模型 ============
@@ -65,7 +69,7 @@ class HealthResponse(BaseModel):
     """健康检查响应"""
     status: str = "ok"
     index_loaded: bool
-    strategy: str = "baseline"
+    strategy: str = "baseline"  # "baseline"/"rerank"/"hyde"/"query_expand"/"multistep"/组合
 
 
 class SessionInfo(BaseModel):
