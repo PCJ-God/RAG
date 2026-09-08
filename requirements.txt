@@ -25,9 +25,9 @@ pandas>=2.1.0
 tqdm>=4.66.0
 nest-asyncio>=1.5.8
 
-# Optional: Web API
-# fastapi>=0.109.0
-# uvicorn>=0.27.0
+# Web API
+fastapi>=0.109.0
+uvicorn>=0.27.0
 
 # Optional: Visualization
 # matplotlib>=3.8.0
