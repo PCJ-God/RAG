@@ -22,7 +22,8 @@ class CLIApp:
     """命令行应用"""
 
     def __init__(self, docs_dir=None, rebuild_index=False,
-                 use_rerank=False, use_hyde=False, use_multi_turn=False):
+                 use_rerank=False, use_hyde=False, use_multi_turn=False,
+                 use_query_expand=False, use_multistep=False):
         """
         Args:
             docs_dir: 文档目录
@@ -30,6 +31,8 @@ class CLIApp:
             use_rerank: 是否启用 Rerank
             use_hyde: 是否启用 HyDE
             use_multi_turn: 是否启用多轮对话模式
+            use_query_expand: 是否启用 LLM 问题扩展
+            use_multistep: 是否启用多步骤查询分解
         """
         check_api_key()
 
@@ -38,6 +41,8 @@ class CLIApp:
         self.use_rerank = use_rerank
         self.use_hyde = use_hyde
         self.use_multi_turn = use_multi_turn
+        self.use_query_expand = use_query_expand
+        self.use_multistep = use_multistep
         self.query_engine = None
         self.chat_engine = None
         self.answer_generator = None
@@ -84,6 +89,12 @@ class CLIApp:
         if self.use_hyde:
             self.retriever.enable_hyde()
             print("🧪 HyDE 已启用")
+        if self.use_query_expand:
+            self.retriever.enable_query_expand()
+            print("🔄 问题扩展已启用")
+        if self.use_multistep:
+            self.retriever.enable_multistep()
+            print("🔗 多步骤查询已启用")
 
         # 创建查询引擎
         self.retriever.create_query_engine(llm=llm_client.get_llm())
@@ -202,6 +213,8 @@ def main():
     parser.add_argument("--rerank", action="store_true", help="启用 Rerank 重排序")
     parser.add_argument("--hyde", action="store_true", help="启用 HyDE 假设文档嵌入")
     parser.add_argument("--multi-turn", action="store_true", help="启用多轮对话模式")
+    parser.add_argument("--query-expand", action="store_true", help="启用 LLM 问题扩展")
+    parser.add_argument("--multistep", action="store_true", help="启用多步骤查询分解")
 
     args = parser.parse_args()
 
@@ -210,7 +223,9 @@ def main():
         rebuild_index=args.rebuild,
         use_rerank=args.rerank,
         use_hyde=args.hyde,
-        use_multi_turn=args.multi_turn
+        use_multi_turn=args.multi_turn,
+        use_query_expand=args.query_expand,
+        use_multistep=args.multistep
     )
     app.run(question=args.question)
 
