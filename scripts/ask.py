@@ -1,12 +1,14 @@
-"""单轮问答 CLI。
+"""多轮问答 CLI。
 
 用法：
     python scripts/ask.py "RAGAS 有几个常用指标？"
     python scripts/ask.py "RAG 建立索引包括哪几步？"
     python scripts/ask.py "什么是上下文工程？" --show-sources
-    python scripts/ask.py                          # 进入交互模式
+    python scripts/ask.py                          # 进入交互模式（自动开新会话）
+    python scripts/ask.py --session-id <id>        # 恢复指定会话
 """
 import sys
+import uuid
 from pathlib import Path
 
 # 让脚本从任意目录运行时都能找到项目根目录下的 src 包
@@ -38,9 +40,18 @@ def main():
     parser.add_argument("--no-rerank", action="store_true", help="关闭重排序")
     parser.add_argument("--no-tag", action="store_true", help="关闭标签检索")
     parser.add_argument("--show-sources", action="store_true", help="展示参考来源")
+    parser.add_argument("--session-id", default=None, help="会话 ID（不传则交互模式自动新建）")
+    parser.add_argument("--no-memory", action="store_true", help="关闭多轮记忆")
+    parser.add_argument("--no-rewrite", action="store_true", help="关闭问题改写")
+    parser.add_argument("--no-decompose", action="store_true", help="关闭问题拆解")
     args = parser.parse_args()
 
-    pipeline = RAGPipeline(domain=args.domain).load()
+    # 单次命令行提问默认不开会话（避免写脏记忆）；交互模式自动开新会话
+    session_id = args.session_id
+    if session_id is None and not args.question:
+        session_id = uuid.uuid4().hex
+
+    pipeline = RAGPipeline(domain=args.domain, session_id=session_id).load()
 
     def ask(question: str):
         return pipeline.query(
@@ -48,13 +59,19 @@ def main():
             top_k=args.top_k,
             use_rerank=not args.no_rerank,
             use_tag=not args.no_tag,
+            use_memory=not args.no_memory,
+            use_rewrite=not args.no_rewrite,
+            use_decompose=not args.no_decompose,
         )
 
     if args.question:
         print_answer(ask(args.question), args.show_sources)
         return
 
-    print("进入交互模式（输入 q 退出）")
+    print(
+        f"进入交互模式（会话 {session_id}，输入 q 退出）\n"
+        f"下次可用 --session-id {session_id} 恢复本会话"
+    )
     while True:
         try:
             question = input("\n问题：").strip()

@@ -1,14 +1,12 @@
-"""融合式检索：语义检索 + 标签检索 两路召回，合并去重后交给重排。
+"""融合式检索：语义 + 标签 两路召回，合并去重后交给重排。
 
-语义路：向量相似度召回（DashVector 直接 query / 本地 LlamaIndex retriever）。
-标签路：按 tag 字段过滤召回（DashVector filter，只看主题不看语义）。
-两路结果只做去重合并，不在这里排序——排序交给 Reranker（rerank 替代 RRF）。
+语义路：VectorStoreIndex.as_retriever（本地与 DashVector 统一走 LlamaIndex）。
+标签路：直接对 DashVector collection 做 tag 字段过滤（纯条件查询，无向量）。
 """
 from typing import List, Optional
 
-from llama_index.core.schema import NodeWithScore, TextNode
-
-from src.embedder import embed_query
+from llama_index.core.schema import NodeWithScore
+from llama_index.core.vector_stores.utils import metadata_dict_to_node
 
 
 class FusionRetriever:
@@ -17,14 +15,12 @@ class FusionRetriever:
     def __init__(
         self,
         top_k: int = 20,
-        index=None,          # 本地模式：LlamaIndex 索引
-        collection=None,     # DashVector 模式：原始 collection
-        api_key=None,        # DashVector 模式：用于把问题向量化
+        index=None,          # LlamaIndex VectorStoreIndex（本地 / DashVector）
+        collection=None,     # DashVector 原始 collection（仅标签路需要）
     ):
         self.top_k = top_k
         self._index = index
         self._collection = collection
-        self._api_key = api_key
         self._vector_retriever = (
             index.as_retriever(similarity_top_k=top_k) if index is not None else None
         )
@@ -39,27 +35,13 @@ class FusionRetriever:
 
     # ---------- 语义路 ----------
     def _semantic_search(self, query: str) -> List[NodeWithScore]:
-        if self._vector_retriever is not None:
-            return self._vector_retriever.retrieve(query)
-
-        q_emb = embed_query(self._api_key, query)
+        if self._vector_retriever is None:
+            return []
         try:
-            resp = self._collection.query(vector=q_emb, topk=self.top_k)
+            return self._vector_retriever.retrieve(query)
         except Exception as e:
             print(f"[retriever] 语义检索失败: {e}")
             return []
-
-        if not resp:
-            return []
-
-        results: List[NodeWithScore] = []
-        for doc in resp:
-            node = self._doc_to_node(doc)
-            if node is not None:
-                results.append(
-                    NodeWithScore(node=node, score=getattr(doc, "score", 0.0))
-                )
-        return results
 
     # ---------- 标签路 ----------
     def _retrieve_by_tag(self, tag: str) -> List[NodeWithScore]:
@@ -75,21 +57,14 @@ class FusionRetriever:
 
         results: List[NodeWithScore] = []
         for doc in resp:
-            node = self._doc_to_node(doc)
-            if node is not None:
+            try:
+                node = metadata_dict_to_node(getattr(doc, "fields", None) or {})
                 results.append(NodeWithScore(node=node, score=0.0))
+            except Exception as e:
+                print(f"[retriever] 标签结果解析失败: {e}")
         return results
 
     # ---------- 工具 ----------
-    @staticmethod
-    def _doc_to_node(doc) -> Optional[TextNode]:
-        fields = getattr(doc, "fields", None) or {}
-        text = fields.get("text", "")
-        if not text:
-            return None
-        meta = {k: v for k, v in fields.items() if k != "text"}
-        return TextNode(id_=doc.id, text=text, metadata=meta)
-
     @staticmethod
     def _merge(
         first: List[NodeWithScore], second: List[NodeWithScore]

@@ -49,8 +49,13 @@ class QualitySplitter:
             text = self._clean(section.get_content())
             if not text:
                 continue
-            meta = dict(section.metadata)
-            meta["tag"] = tag
+            # 只保留后续检索/展示需要的字段，且统一转为字符串，
+            # 兼容 DashVectorStore 的 flat_metadata 校验（值必须为 str/int/float/None）
+            meta = {
+                "tag": tag,
+                "file_name": str(section.metadata.get("file_name") or ""),
+                "header_path": str(section.metadata.get("header_path") or ""),
+            }
 
             if len(text) <= self.chunk_size:
                 section.set_content(text)

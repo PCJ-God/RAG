@@ -53,6 +53,12 @@ class Config:
     dashvector_collection: str = ""  # 留空则用 "<domain>_knowledge"
     dashvector_dim: int = 1024       # text-embedding-v3 维度，建库后不可改
 
+    # 多轮记忆（chat_memory collection，仅 dashvector 模式启用）
+    memory_collection: str = "chat_memory"
+    memory_top_k: int = 4            # 语义检索的历史轮次数量
+    memory_window: int = 3           # 最近 N 轮以纯文本形式直接带入
+    user_id: str = "default_user"    # 单用户多会话；未来多用户可换
+
     @classmethod
     def from_env(cls) -> "Config":
         return cls(
@@ -72,6 +78,10 @@ class Config:
             dashvector_endpoint=os.getenv("DASHSVECTOR_ENDPOINT", ""),
             dashvector_collection=os.getenv("DASHSVECTOR_COLLECTION", ""),
             dashvector_dim=int(os.getenv("DASHSVECTOR_DIM", "1024")),
+            memory_collection=os.getenv("MEMORY_COLLECTION", "chat_memory"),
+            memory_top_k=int(os.getenv("MEMORY_TOP_K", "4")),
+            memory_window=int(os.getenv("MEMORY_WINDOW", "3")),
+            user_id=os.getenv("USER_ID", "default_user"),
         )
 
 
