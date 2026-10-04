@@ -12,6 +12,9 @@ openai>=1.30.0
 dashvector>=1.0.0
 llama-index-vector-stores-dashvector==0.2.0
 
+# AI 安全护栏（阿里云内容安全 / 绿网）
+alibabacloud_green20220302==3.2.4
+
 # 评测
 ragas>=0.1.0,<0.2.0
 datasets>=2.14.0

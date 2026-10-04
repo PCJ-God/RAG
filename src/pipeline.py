@@ -17,6 +17,7 @@ from src.retrieval.retriever import FusionRetriever
 from src.retrieval.reranker import Reranker
 from src.retrieval.rewriter import QueryRewriter
 from src.retrieval.tag_extractor import TagExtractor
+from src.safety.guard import BLOCKED_REPLY, ContentGuard
 
 
 class RAGPipeline:
@@ -45,6 +46,7 @@ class RAGPipeline:
         self.tag_extractor = TagExtractor(self.llm_client, self.config)
         self.rewriter = QueryRewriter(self.llm_client)
         self.decomposer = QueryDecomposer(self.llm_client)
+        self.guard = ContentGuard(self.config)
         self.retriever: Optional[FusionRetriever] = None
         self.reranker: Optional[Reranker] = None
 
@@ -101,8 +103,15 @@ class RAGPipeline:
         use_memory: bool = True,
         use_rewrite: bool = True,
         use_decompose: bool = True,
+        use_guard: bool = True,
     ) -> Answer:
-        """端到端问答：改写 → 拆解 → 检索 → 重排 → 生成 → 记忆。"""
+        """端到端问答：护栏 → 改写 → 拆解 → 检索 → 重排 → 生成 → 护栏 → 记忆。"""
+        # 输入护栏：拦截违规提问，不进入后续任何处理
+        if use_guard:
+            result = self.guard.check_input(question)
+            if not result.passed:
+                return Answer(answer=BLOCKED_REPLY, sources=[])
+
         if self.retriever is None:
             self.load(self.domain)
         assert self.retriever is not None
@@ -147,6 +156,12 @@ class RAGPipeline:
             answer = self._multi_pass(
                 question, sub_questions, use_rerank=use_rerank, use_tag=use_tag
             )
+
+        # 输出护栏：拦截违规回答，替换为统一话术
+        if use_guard:
+            out = self.guard.check_output(answer.answer)
+            if not out.passed:
+                answer = Answer(answer=BLOCKED_REPLY, sources=[])
 
         if memory_on:
             self._record_turn(question, answer.answer)

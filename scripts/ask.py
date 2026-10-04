@@ -44,6 +44,7 @@ def main():
     parser.add_argument("--no-memory", action="store_true", help="关闭多轮记忆")
     parser.add_argument("--no-rewrite", action="store_true", help="关闭问题改写")
     parser.add_argument("--no-decompose", action="store_true", help="关闭问题拆解")
+    parser.add_argument("--no-guard", action="store_true", help="关闭安全护栏")
     args = parser.parse_args()
 
     # 单次命令行提问默认不开会话（避免写脏记忆）；交互模式自动开新会话
@@ -62,6 +63,7 @@ def main():
             use_memory=not args.no_memory,
             use_rewrite=not args.no_rewrite,
             use_decompose=not args.no_decompose,
+            use_guard=not args.no_guard,
         )
 
     if args.question:

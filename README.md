@@ -1,178 +1,125 @@
 # RAG 知识答疑助手
 
-一个基于 **RAG（检索增强生成）** 的学习助手：对某个 RAG 知识点不清楚时直接提问，它会从课程知识库中检索相关内容，给出**带来源引用**的回答，帮助你学习而非闲聊。
+一个基于 **RAG（检索增强生成）** 的学习助手：对某个 RAG 知识点不清楚时直接提问，它会从课程知识库中检索相关内容，给出**带来源引用**的回答。
 
-当前已支持**多轮对话**：会话记忆保持话题连贯、全局记忆沉淀用户长期偏好、模糊问题自动改写、复杂问题自动拆解。
+当前已支持：多轮对话（双层记忆 + 问题改写 + 复杂问题拆解）、AI 安全护栏（阿里云内容安全）。
 
-## 项目定位
+## 项目全景
 
-- 回答的是「RAG 知识点不清晰」这类学习问题，不做通用聊天。
-- 知识库按主题分域管理，当前只有 `rag` 域，后续可自行添加 `agent` 等域，主流程无需改动。
-- **质量优先于功能数量**：一条高质量主链路，各环节可独立开关、可独立替换。
-
-## 核心能力总览
-
-| 阶段 | 模块 | 已实现内容 |
-| --- | --- | --- |
-| 文档摄入 | `document/` | Markdown 加载；结构感知分块（按标题层级切块、标题路径写入元数据、超长小节按句子二次切分、清洗 Notebook 导出的 HTML 噪声）；按文件名打知识点标签 |
-| 索引 | `indexing/` | `build / load / exists` 统一接口；本地 JSON 与 DashVector 两种后端；DashVector 经 LlamaIndex `DashVectorStore` 接入 `VectorStoreIndex`（见踩坑记录里的官方包补丁） |
-| 检索 | `retrieval/` | 问题改写 + 复杂问题拆解 + 标签抽取 + 融合检索（语义 + 标签两路）+ 重排序，详见下文 |
-| 生成 | `generation/` | LLM 走 DashScope OpenAI 兼容模式；只依据检索上下文回答、防幻觉；引用带文档名；用户画像注入 system prompt，详见下文 |
-| 记忆 | `memory/` | 双层记忆（会话记忆 + 全局画像），存 DashVector 的 `chat_memory` collection，单用户多会话 |
-| 评测 | `evaluation/` | Ragas 评测，指标：`answer_correctness` / `faithfulness` / `context_recall` / `context_precision` |
-
-## 系统架构
+这是一条完整的 RAG 学习链路，基于 **LlamaIndex 基座**搭建，覆盖 7 个环节：
 
 ```
-document/ ──> indexing/ ──> retrieval/ ──> generation/
-(加载+分块)   (构建/加载)   (改写/拆解/      (LLM+提示词)
-                           融合检索+重排)
-      └──────────── memory/（双层记忆，DashVector）────────────┘
-      └────────────── pipeline.py 端到端编排 ──────────────────┘
+文档摄入 → 索引 → 检索 → 生成 → 记忆 → 安全护栏 → 评测
+ document   indexing  retrieval  generation  memory  safety  evaluation
 ```
 
-一次提问的完整过程（`RAGPipeline.query`）：
+每个环节对应一个 `src/` 子包，由 `pipeline.py` 统一编排。下面先给一张「知识地图」，标出每个环节踩到了哪些知识点，再逐模块展开解读。
 
-1. **读记忆**（多轮会话）：检索用户画像（全局记忆）＋ 最近 3 轮纯文本 ＋ 语义召回更早历史。
-2. **问题改写**：模糊 / 含指代的问题由 LLM 扩写为完整检索问题。
-3. **问题拆解**：复杂问题由 LLM 拆成 ≤4 个子问题。
-4. **标签抽取 + 融合召回 + 重排**：语义路 + 标签路两路召回，去重后精排。
-5. **生成**：用户画像注入 system prompt，对话历史与参考资料进主提示词，生成带引用回答。
-6. **写回记忆**：本轮问答写入会话记忆，并由 LLM 抽取长期事实写入全局画像。
+## 知识地图总览
 
----
-
-# 检索（retrieval）
-
-检索链路位于 `src/retrieval/`，按执行顺序由 5 个组件构成：
-
-```
-原始问题 ─> QueryRewriter(改写) ─> QueryDecomposer(拆解) ─> TagExtractor(标签)
-                │                        │                      │
-                │                        └─ 子问题逐个走右侧 ──┤
-                └────────────────────────────────────────────┤
-                        FusionRetriever(语义+标签两路召回) <──┘
-                                │
-                        Reranker(精排 top_n)
-                                │
-                            交给 generation/
-```
-
-## 1. 问题改写 `rewriter.py`
-
-`QueryRewriter` 用 LLM 把两类"不好检索"的问题改写成完整、明确的检索问题：
-
-- **模糊问题**：如用户只输入 `"RAG"`，改写为「RAG（检索增强生成）的技术原理、典型架构、主流应用场景及常见挑战是什么？」。
-- **指代问题**：如多轮里的「那第二步是什么？」，结合【对话历史】改写为「RAG 建立索引的第二步是什么？」。
-
-要点：
-
-- 改写 prompt 约束**控制在 1~2 句话、不超过 50 字**，避免过度扩写稀释检索向量。
-- 改写结果**只用于召回**，最终生成仍针对用户的原始问题，保证回答忠实于用户意图。
-
-## 2. 复杂问题拆解 `decomposer.py`
-
-`QueryDecomposer` 判断问题是否复杂：
-
-- 简单问题 → 原样返回（单路检索）。
-- 复杂问题 → LLM 拆成 **2~4 个子问题**（代码硬上限 4，宁少勿多）。
-
-每个子问题独立走一遍「标签抽取 → 融合召回 → 重排 → 生成」，最后由 LLM 把各子答案**整合成一份连贯的最终回答**（`merge`）。
-
-> 说明：这里没有直接用 LlamaIndex 的 `MultiStepQueryEngine`，因为它只能包一个 `query_engine`，若包 `index.as_query_engine()` 会绕过本项目自己的融合检索、重排与记忆注入。因此拆解用 LLM 产出子问题列表，子问题仍走自己的检索链路，保留全部能力。
-
-## 3. 标签抽取 `tag_extractor.py`
-
-`TagExtractor` 用 LLM 从问题中抽取**一个**知识点标签，候选集合来自 `src/config.py` 的 `TAG_LIST`（由 `TAG_MAP` 按文档文件名映射而来，两端一致）。
-
-- 抽取结果不在候选集合内 → 返回 `None`，标签路自动跳过。
-- 标签用于下面融合检索的**标签路**前置过滤。
-
-## 4. 融合召回 `retriever.py`
-
-`FusionRetriever` 做**两路召回、合并去重**：
-
-| 路 | 实现 | 说明 |
-| --- | --- | --- |
-| 语义路 | `VectorStoreIndex.as_retriever(similarity_top_k=top_k)` | 本地 JSON 与 DashVector **统一走 LlamaIndex** 的向量索引，语义相似度召回 top-k |
-| 标签路 | DashVector collection 直接 `query(filter="tag='...'", topk=top_k*2)` | **纯条件过滤、无向量**，只召回同一知识点标签下的块；仅 DashVector 模式启用，本地模式自动跳过 |
-
-合并规则：两路结果按 `node_id` 去重，同一片段保留分数更高的一条，保持各自原始顺序。
-
-## 5. 重排序 `reranker.py`
-
-`Reranker` 把粗排结果精排到 `top_n`：
-
-- 首选 **DashScope 专用 rerank 端点**（`qwen3-rerank`），相关度打分更准。
-- 未安装对应包时**自动降级**为 LLM 打分精排（`LLMRerank`），保证可运行。
-
-最终 top_n 个文档块交给生成模块。
-
----
-
-# 生成（generation）
-
-生成链路位于 `src/generation/`，由 3 个文件构成。
-
-## 1. LLM 客户端 `llm.py`
-
-`LLMClient` 提供两个入口：
-
-- `invoke(prompt, system_prompt)`：直接走 OpenAI 兼容协议的 `chat.completions`，返回文本，供改写 / 拆解 / 标签抽取 / 全局事实抽取 / 答案生成等所有提示词类调用使用。
-- `get_llm()`：返回 LlamaIndex 的 `OpenAILike` 实例，挂到 `Settings.llm`，供需要 LlamaIndex LLM 接口的组件使用。
-
-关键点：
-
-- 走 **DashScope OpenAI 兼容模式**（`/compatible-mode/v1`），因为 `sk-ws-` 开头的百炼 Key 只支持该协议（见踩坑记录）。
-- 统一使用 `temperature`（默认 0.1，问答追求准确）与 `max_tokens`（默认 1024）配置。
-
-## 2. 生成器 `generator.py`
-
-`AnswerGenerator.generate(question, nodes, history, profile)` 完成"拼提示词 → 调 LLM → 组装结果"：
-
-1. **上下文拼装**：把重排后的每个文档块带上标签，形如：
-
-   ```
-   [1]（2_2_扩展答疑机器人的知识范围.md · 1.1 建立索引）
-   <块原文>
-   ```
-
-2. **提示词填充**：主提示词 `RAG_ANSWER_TEMPLATE` 含【对话历史】【参考资料】【问题】三段。
-3. **画像注入**：若有用户画像，作为 **system prompt** 注入（`invoke(prompt, system_prompt=...)`）。
-4. **返回** `Answer(answer, sources)`，其中 `sources` 保存每个来源的编号、原文、分数、文件名、章节路径，供 `--show-sources` 展示。
-
-## 3. 提示词 `prompts.py`
-
-`RAG_ANSWER_TEMPLATE` 的核心约束（防幻觉是重点）：
-
-1. 只依据【参考资料】回答，不使用资料之外的知识臆测。
-2. 回答简明、准确、结构化，先给直接结论再补充解释。
-3. 资料不足以回答时，明确说明"参考资料中未找到相关内容"。
-4. 答案末尾列出实际引用的资料编号与文档信息，例如：`参考来源：[1]（2_2_扩展答疑机器人的知识范围.md）、[3]（2_3_优化提示词改善答疑机器人回答质量.md）`。
-
----
-
-# 多轮对话记忆（memory）
-
-双层记忆位于 `src/memory/`，统一存 DashVector 的 `chat_memory` collection（1024 维）。
-
-| 层 | 范围 | 用途 | 检索方式 |
+| 环节 | 模块 | 一句话干什么 | 涉及的知识点 |
 | --- | --- | --- | --- |
-| 会话记忆 | 单个 `session_id` | 保持当前话题连贯 | `session_id` 前置过滤 + 语义 top-k |
-| 全局画像 | 跨会话，按 `user_id` | 记住身份 / 偏好 / 长期目标 | `user_id` + `memory_type="global"`，每轮注入 system prompt |
-
-每条记录字段：`user_id / session_id / memory_type / turn_id / timestamp / role`，正文存在节点里。
-
-- `memory_store.py`：`MemoryStore`，提供 `add_turn`（一轮合并一条：`用户：q\n助手：a`）、`add_global_fact`、`retrieve_session`、`retrieve_global`。
-- `extractor.py`：`GlobalMemoryExtractor`，每轮对话结束后由 LLM 判断是否有长期事实并逐条抽取写入全局画像。
-
-**滑动窗口策略**：最近 3 轮以纯文本直接带进 prompt（`memory_window=3`），更早历史按语义检索召回（`memory_top_k=4`），按 `turn_id` 去重。摘要生成、记忆衰减、定期清理留待后续版本。
-
-**会话管理**：`scripts/ask.py` 交互模式自动生成新会话（UUID），`--session-id <id>` 恢复旧会话；单次命令行提问默认不开会话，避免写脏记忆。
+| 文档摄入 | `document/` | 加载 Markdown、结构感知分块、打标签 | 文本分块 Chunking、元数据 Metadata、标签体系 |
+| 索引 | `indexing/` | 向量化并写入本地 / DashVector | Embedding、向量检索 ANN、向量库抽象 |
+| 检索 | `retrieval/` | 改写 → 拆解 → 标签 → 融合召回 → 重排 | 查询改写/扩展、指代消解、问题分解、多跳推理、混合检索、两阶段检索 Rerank |
+| 生成 | `generation/` | 拼上下文 → 调 LLM → 带引用回答 | RAG 生成、上下文学习 ICL、提示词工程、防幻觉 Grounding |
+| 记忆 | `memory/` | 双层记忆读写 | 长短期记忆、滑动窗口、记忆语义召回、事实抽取 |
+| 安全护栏 | `safety/` | 输入/输出双向内容审核 | 内容安全、输入/输出护栏、fail-open/fail-closed |
+| 评测 | `evaluation/` | Ragas 跑 QA 对 | RAG 评测指标：忠实度/正确性/召回率/精确率 |
+| 编排 | `pipeline.py` | 串起以上所有环节 | RAG 完整链路、可开关的 Pipeline 设计 |
 
 ---
 
-# 快速开始
+## 模块解读
+
+### 1. 文档摄入 `document/`
+
+**过程（略）**：加载 Markdown → 结构感知分块 → 清洗噪声 → 按文件名打标签。
+
+**涉及的知识点**：
+
+- **文本分块（Chunking）**：检索和生成都以"块"为单位，块切得好不好直接决定召回质量。本项目不是固定字数硬切，而是**结构感知分块**——按标题层级切，保证每块语义完整；超长小节再按句子二次切；`chunk_overlap` 保留相邻块的重叠，防止语义在边界处被切断。
+- **元数据（Metadata）**：每块把「章节路径 header_path」「文件名」写入元数据，供生成阶段的引用标注与溯源使用——这是 RAG 里"答案可解释、可追溯"的数据基础。
+- **标签体系（Tag）**：按文件名映射知识点标签（`TAG_MAP`），让"文档组织方式"与"提问分类方式"两端对齐，标签才能作为检索的过滤条件。
+
+### 2. 索引 `indexing/`
+
+**过程（略）**：调用 Embedding 把每块转成向量，写入本地 JSON 或 DashVector；`build / load / exists` 统一接口。
+
+**涉及的知识点**：
+
+- **向量化（Embedding）**：用 `text-embedding-v3` 把文本映射成 1024 维稠密向量，使"语义相近 → 向量相近"，这是语义检索的数学前提。
+- **近似最近邻（ANN）检索**：向量库里不可能逐条精确比对，`VectorStoreIndex` / DashVector 底层用 HNSW 等 ANN 索引，用精度换速度，快速召回 top-k。
+- **向量库抽象**：本地 JSON（零依赖、开发友好）与云向量库（可扩展、支持字段过滤）共用同一套 LlamaIndex 接口，切换后端不改主流程。
+
+### 3. 检索 `retrieval/`
+
+**过程（略）**：问题改写 → 复杂问题拆解 → 标签抽取 → 语义+标签两路召回 → 重排。
+
+**涉及的知识点**：
+
+- **查询改写 / 查询扩展（Query Rewriting / Expansion）**——`rewriter.py`：用户口语化的模糊问题（如 "RAG"）或含指代的问题（如 "那第二步呢"）直接拿去检索效果很差，先用 LLM 扩充成完整、明确的检索问题。
+- **指代消解（Coreference Resolution）**——`rewriter.py`：把 "它""第二步" 这类指代结合对话历史还原成具体对象，这是多轮对话检索的关键难点。
+- **问题分解（Question Decomposition）与多跳推理（Multi-hop）**——`decomposer.py`：复杂问题（"建立索引和检索生成分别有哪些步骤？"）拆成多个子问题，每个子问题独立检索，最后 LLM 整合。本质是把"多跳问题"降成"单跳问题"逐个击破。
+- **意图识别 / 主题分类**——`tag_extractor.py`：用 LLM 把问题映射到有限标签集合（闭集分类），结果作为召回前的过滤条件，属于"先分类、后检索"的思路。
+- **混合检索（Hybrid Retrieval）**——`retriever.py`：**语义路**（稠密向量相似度召回）+ **标签路**（按 `tag` 字段条件过滤）两路召回再合并去重。向量检索擅长"语义相近"，字段过滤擅长"精确限定"，两者互补。
+- **两阶段检索 / 重排序（Retrieve-then-Rerank）**——`reranker.py`：先用轻量模型粗排召回较多候选，再用更强的精排模型（`qwen3-rerank`，交叉编码器式打分）筛到 top-n。粗排管"召回率"，精排管"精确率"。
+
+### 4. 生成 `generation/`
+
+**过程（略）**：把 top-n 文档块拼成【参考资料】→ 填入提示词 → 调 LLM → 返回带引用的回答。
+
+**涉及的知识点**：
+
+- **RAG 的生成侧**——`generator.py`：把检索到的上下文作为输入喂给 LLM，属于**上下文学习（In-Context Learning）**——模型不靠训练记忆，而是"边看边答"。
+- **提示词工程（Prompt Engineering）**——`prompts.py`：角色设定 + 约束（只依据参考资料）+ 引用格式要求，是控制 RAG 输出质量的主要手段。
+- **防幻觉 / 接地（Grounding）**——`prompts.py`：强制"只用资料回答、资料不足就明说"，并用引用编号让答案可溯源，是对抗 LLM 幻觉的核心机制。
+- **采样参数**——`llm.py`：问答场景用低 `temperature`（0.1）降低随机性、`max_tokens` 限制长度；走 OpenAI 兼容协议（`/compatible-mode/v1`）。
+- **画像注入**——`generator.py`：用户画像作为 system prompt 注入，与正文隔离，属于"角色/约束层与内容层分离"的提示词结构。
+
+### 5. 记忆 `memory/`
+
+**过程（略）**：提问时读记忆（画像 + 历史），生成后写回（会话记忆 + 全局事实）。
+
+**涉及的知识点**：
+
+- **长短期记忆（Long/Short-term Memory）**：会话记忆（当前 session 话题，短期）+ 全局画像（跨会话偏好，长期），是 Agent 记忆的经典分层。
+- **滑动窗口（Sliding Window）**：最近 3 轮历史纯文本直给，更早历史按语义召回——用"窗口 + 检索"缓解长上下文的成本与噪声。
+- **记忆检索**：把历史对话当向量库，按语义相似度召回相关轮次，而非简单全塞，属于"记忆即检索"的思想。
+- **事实抽取（Fact Extraction）**：每轮后由 LLM 判断并抽取长期事实写入画像，类似"事实验证 + 画像沉淀"。
+- **多租户字段过滤**：`user_id / session_id` 前置过滤隔离，是"记忆私有化"的实现基础。
+
+### 6. 安全护栏 `safety/`
+
+**过程（略）**：输入检测 → 正常链路 → 输出检测，命中风险替换为固定话术。
+
+**涉及的知识点**：
+
+- **内容安全（Content Moderation）**：接入阿里云绿网文本审核 PLUS，`llm_query_moderation`（检测提问）+ `llm_response_moderation`（检测回答）。
+- **输入护栏 + 输出护栏（Input/Output Guardrail）**：双向防护，分别卡在链路最前和最后，属于 LLM 应用安全的标准位置。
+- **风险分级处置**：按 `RiskLevel`（high/medium/low/none）分级，命中 `high,medium` 即拦截。
+- **fail-open vs fail-closed**：护栏服务异常时"放行并告警"（fail-open），在"可用性"与"安全性"之间做取舍——本项目选择优先保证主链路可用。
+
+### 7. 评测 `evaluation/`
+
+**过程（略）**：用 Ragas 对 QA 对评测。
+
+**涉及的知识点**：
+
+- **RAG 评测四指标**：`faithfulness`（回答是否忠实于上下文）、`answer_correctness`（答案是否正确）、`context_recall`（该召回的是否召回全）、`context_precision`（召回的是否相关）。前两者评"生成"，后两者评"检索"。
+
+### 8. 编排 `pipeline.py`
+
+**过程（略）**：`query()` 串起 8 步——输入护栏 → 读记忆 → 改写 → 拆解 → 标签+召回 → 重排 → 生成 → 输出护栏 → 写回记忆。
+
+**涉及的知识点**：
+
+- **RAG 完整链路**：把散件串成一条可运行的问答流水线。
+- **可开关的 Pipeline**：每个环节都能单独关闭（`--no-*`），方便做消融实验（Ablation）对比各环节贡献。
+
+---
+
+## 快速开始
 
 1. 配置环境：`cp .env.example .env`，填入 `DASHSCOPE_API_KEY`（百炼平台获取）。
 2. 安装依赖：`pip install -r requirements.txt`。
@@ -182,23 +129,13 @@ document/ ──> indexing/ ──> retrieval/ ──> generation/
 
 ## 向量库
 
-默认用本地 JSON（`VECTOR_STORE=local`），零依赖、开箱即用。
-
-要用阿里云 DashVector，在 `.env` 中设置：
-
-```ini
-VECTOR_STORE=dashvector
-DASHSVECTOR_API_KEY=你的 DashVector API-KEY
-DASHSVECTOR_ENDPOINT=你的 DashVector endpoint
-```
-
-> 注意：DashVector 的 API-KEY 与百炼的 `DASHSCOPE_API_KEY` 是两套独立的，需在 DashVector 控制台单独获取。标签检索与多轮记忆依赖 DashVector 的字段过滤能力，本地模式下自动跳过。
+默认本地 JSON（`VECTOR_STORE=local`），零依赖。要用 DashVector，在 `.env` 里配 `VECTOR_STORE=dashvector` + `DASHSVECTOR_API_KEY/ENDPOINT`。标签检索与多轮记忆依赖 DashVector 字段过滤，本地模式自动跳过。
 
 ## 配置说明（.env）
 
 ```ini
 # 模型
-DASHSCOPE_API_KEY=        # 百炼 API Key（调用 LLM / Embedding / Rerank）
+DASHSCOPE_API_KEY=        # 百炼 API Key（LLM / Embedding / Rerank）
 LLM_MODEL=qwen-plus
 EMBEDDING_MODEL=text-embedding-v3
 RERANK_MODEL=qwen3-rerank
@@ -207,113 +144,98 @@ RERANK_MODEL=qwen3-rerank
 CHUNK_SIZE=512
 CHUNK_OVERLAP=50
 
-# 检索：先粗排召回 TOP_K，再精排到 RERANK_TOP_N
+# 检索：粗排 TOP_K，精排到 RERANK_TOP_N
 TOP_K=20
 RERANK_TOP_N=3
 
 # 生成
-TEMPERATURE=0.1           # 问答助手追求准确，建议 0~0.3
+TEMPERATURE=0.1
 MAX_TOKENS=1024
 
 # 向量库
 VECTOR_STORE=local        # local / dashvector
 DASHSVECTOR_API_KEY=
 DASHSVECTOR_ENDPOINT=
-DASHSVECTOR_COLLECTION=   # 留空则自动用 "<domain>_knowledge"
-DASHSVECTOR_DIM=1024      # text-embedding-v3 固定 1024，建库后不可改
+DASHSVECTOR_COLLECTION=
+DASHSVECTOR_DIM=1024
 
 # 多轮记忆（仅 dashvector 模式）
 MEMORY_COLLECTION=chat_memory
-MEMORY_TOP_K=4            # 语义检索的历史轮次数量
-MEMORY_WINDOW=3           # 最近 N 轮以纯文本直接带入
-USER_ID=default_user      # 单用户多会话；未来多用户可换
-```
+MEMORY_TOP_K=4
+MEMORY_WINDOW=3
+USER_ID=default_user
 
-知识点标签集合定义在 `src/config.py` 的 `TAG_MAP` 中，当前映射了课程 5 篇文档对应的标签；新文档若不在映射里，会归入「其他」。
+# AI 安全护栏（未配置 AccessKey 自动禁用）
+ALIBABA_CLOUD_ACCESS_KEY_ID=
+ALIBABA_CLOUD_ACCESS_KEY_SECRET=
+CONTENT_SECURITY_REGION=cn-shanghai
+CONTENT_SECURITY_ENDPOINT=green-cip.cn-shanghai.aliyuncs.com
+CONTENT_SECURITY_QUERY_SERVICE=llm_query_moderation
+CONTENT_SECURITY_RESPONSE_SERVICE=llm_response_moderation
+CONTENT_SECURITY_BLOCK_LEVELS=high,medium
+```
 
 ## 命令速查
 
 ```bash
 # 构建索引
-python scripts/build_index.py                     # 构建默认域 rag
-python scripts/build_index.py --domain agent      # 构建其他知识域
-python scripts/build_index.py --rebuild           # 强制重建
+python scripts/build_index.py                 # 默认域 rag
+python scripts/build_index.py --domain agent
+python scripts/build_index.py --rebuild
 
 # 提问
-python scripts/ask.py "RAG 建立索引包括哪几步？"
-python scripts/ask.py "..." --show-sources        # 展示来源清单（文件名/章节/分数/原文）
-python scripts/ask.py "..." --top-k 5             # 调整最终用于生成的块数
-python scripts/ask.py "..." --no-rerank           # 关闭重排序
-python scripts/ask.py "..." --no-tag              # 关闭标签检索
-python scripts/ask.py "..." --no-rewrite          # 关闭问题改写
-python scripts/ask.py "..." --no-decompose        # 关闭问题拆解
-python scripts/ask.py "..." --no-memory           # 关闭多轮记忆
-python scripts/ask.py                            # 进入交互模式（自动开新会话）
-python scripts/ask.py --session-id <id>          # 恢复指定会话
-python scripts/ask.py --domain agent "..."       # 指定知识域
+python scripts/ask.py "..."                   # 单次提问
+python scripts/ask.py "..." --show-sources    # 展示来源（文件/章节/分数/原文）
+python scripts/ask.py "..." --top-k 5         # 最终用于生成的块数
+python scripts/ask.py "..." --no-rerank       # 关闭重排
+python scripts/ask.py "..." --no-tag          # 关闭标签检索
+python scripts/ask.py "..." --no-rewrite      # 关闭改写
+python scripts/ask.py "..." --no-decompose    # 关闭拆解
+python scripts/ask.py "..." --no-memory       # 关闭记忆
+python scripts/ask.py "..." --no-guard        # 关闭安全护栏
+python scripts/ask.py                         # 交互模式（自动开新会话）
+python scripts/ask.py --session-id <id>       # 恢复会话
+python scripts/ask.py --domain agent "..."    # 指定知识域
 
 # 评测
 python scripts/eval.py
-python scripts/eval.py --qa-file data/eval/qa_pairs.json
 ```
 
 ## 目录结构
 
 ```
-├── data/
-│   ├── knowledge/          # 知识库（按主题分域）
-│   │   └── rag/            # 当前域：RAG 课程笔记
-│   └── eval/               # 评测问答对
+├── data/knowledge/rag/    # 知识库（按主题分域）
 ├── src/
-│   ├── config.py           # 集中配置（.env 覆盖）+ 知识点标签
-│   ├── embedder.py         # 向量化（LlamaIndex BaseEmbedding，兼容模式，批量 10）
-│   ├── document/
-│   │   ├── loader.py       # Markdown 加载
-│   │   └── splitter.py     # 结构感知分块
-│   ├── indexing/
-│   │   ├── indexer.py      # 索引构建 / 加载（VectorStoreIndex）
-│   │   └── dashvector_store.py  # DashVectorStore 补丁 + 建/取 collection 工具
-│   ├── retrieval/
-│   │   ├── rewriter.py     # 问题改写
-│   │   ├── decomposer.py   # 复杂问题拆解 + 子答案整合
-│   │   ├── tag_extractor.py# 知识点标签抽取
-│   │   ├── retriever.py    # 融合检索（语义 + 标签）
-│   │   └── reranker.py     # 重排序
-│   ├── generation/
-│   │   ├── llm.py          # LLM 客户端（OpenAI 兼容 + LlamaIndex）
-│   │   ├── generator.py    # 答案生成器
-│   │   └── prompts.py      # 提示词模板
-│   ├── memory/
-│   │   ├── memory_store.py # 双层记忆存储
-│   │   └── extractor.py    # 全局画像（长期事实）抽取
-│   ├── evaluation/         # Ragas 评测
-│   └── pipeline.py         # 端到端编排
-├── scripts/                # CLI 入口
-│   ├── build_index.py
-│   ├── ask.py
-│   └── eval.py
+│   ├── config.py          # 集中配置 + 知识点标签
+│   ├── embedder.py        # Embedding（LlamaIndex BaseEmbedding）
+│   ├── document/          # 加载 + 结构感知分块
+│   ├── indexing/          # 索引构建 / 加载
+│   ├── retrieval/         # 改写 / 拆解 / 标签 / 融合检索 / 重排
+│   ├── generation/        # LLM 客户端 + 提示词 + 生成器
+│   ├── memory/            # 双层记忆存储 + 画像抽取
+│   ├── safety/            # AI 安全护栏
+│   ├── evaluation/        # Ragas 评测
+│   └── pipeline.py        # 端到端编排
+├── scripts/               # CLI 入口（build_index / ask / eval）
 ├── requirements.txt
 ├── .env.example
-└── knowledge_base/         # 本地索引持久化（gitignore）
+└── knowledge_base/        # 本地索引持久化（gitignore）
 ```
 
 ## 关键技术说明（踩坑记录）
 
-这些是调试过程中固化为代码实现的事实，后续改动时注意：
-
-1. **`sk-ws-` 开头的百炼 Key 只支持 OpenAI 兼容模式**：原生 `TextEmbedding` 接口会返回 `InvalidApiKey`。因此 LLM 与向量化都走 `/compatible-mode/v1`（`src/embedder.py`、`src/generation/llm.py`）；而 rerank 的原生接口接受该 Key，所以重排走 DashScope 原生。
-2. **兼容模式向量化单次最多 10 条文本**：见 `src/embedder.py` 的 `EMBED_BATCH_SIZE=10`。
-3. **DashVector 的 `client.get()` 对不存在的 collection 也返回句柄**（内部带 `code=-2021`），不能靠 `get() is None` 判断是否存在；正确做法是查 `client.list()`。且**创建是异步的**，建完立刻写入会报 `Not found collection`，需轮询 `stats()` 直到可用（见 `src/indexing/dashvector_store.py`）。
-4. **`llama-index-vector-stores-dashvector` 0.2.0 有两个 bug**：未实现基类抽象属性 `client`；`support_sparse_vector=False` 时漏初始化 `_support_sparse_vector/_encoder`。用 `PatchedDashVectorStore` 子类修复。
-5. **DashVector 其他注意点**：维度 1024（建库后不可改）；`delete` 是异步的，`--rebuild` 需「删除后重试 create」；公网访问需在控制台配置 IP 白名单，否则插入报 `-2939 Cluster whiteList validate fail`。
-6. **`.env` 为权威来源**：`src/config.py` 使用 `load_dotenv(override=True)`，避免 shell 里残留的旧环境变量遮蔽 `.env`。
-7. **本地模式 embedding 的已知 bug 修复**：`create_embed_model()` 中对 `llama-index-embeddings-dashscope` 0.2.x 的 pydantic 私有属性 bug 做了手动补丁。
+1. **`sk-ws-` 开头的百炼 Key 只支持 OpenAI 兼容模式**：原生接口报 `InvalidApiKey`，所以 LLM 与向量化都走 `/compatible-mode/v1`；rerank 原生接口接受该 Key，走 DashScope 原生。
+2. **兼容模式向量化单次最多 10 条**：`src/embedder.py` 的 `EMBED_BATCH_SIZE=10`。
+3. **DashVector `client.get()` 对不存在的 collection 也返回句柄**（内部 `code=-2021`），要用 `client.list()` 判断；且创建是异步的，建完立刻写入会报错，需轮询 `stats()` 直到可用。
+4. **`llama-index-vector-stores-dashvector` 0.2.0 有两个 bug**：未实现抽象属性 `client`；漏初始化 `_support_sparse_vector/_encoder`，用 `PatchedDashVectorStore` 子类修复。
+5. **DashVector 其他**：维度 1024 建库后不可改；`delete` 异步，`--rebuild` 需"删后重试 create"；公网访问需配 IP 白名单。
+6. **`.env` 权威来源**：`load_dotenv(override=True)`，避免 shell 旧变量遮蔽。
+7. **本地模式 embedding 的 pydantic 私有属性 bug**：`create_embed_model()` 里手动补丁。
+8. **通义千问上下文缓存**：隐式缓存默认自动生效（前缀 ≥1024 token 才激活，命中按 20% 计费），无需代码；显式缓存需 `cache_control` 标记（命中 10%、建缓存 125%）。本项目稳定前缀不足 1024，暂不启用。
 
 ## 扩展新知识域
 
-以 `agent` 为例，两步即可：
-
-1. 把文档放入 `data/knowledge/agent/`，并在 `src/config.py` 的 `TAG_MAP` 中补充该域文档对应的标签。
+1. 文档放入 `data/knowledge/agent/`，在 `src/config.py` 的 `TAG_MAP` 补标签。
 2. `python scripts/build_index.py --domain agent`，再 `python scripts/ask.py "..." --domain agent`。
 
-主流程各阶段无需改动。
+主流程各环节无需改动。

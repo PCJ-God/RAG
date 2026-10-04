@@ -59,6 +59,15 @@ class Config:
     memory_window: int = 3           # 最近 N 轮以纯文本形式直接带入
     user_id: str = "default_user"    # 单用户多会话；未来多用户可换
 
+    # AI 安全护栏（阿里云内容安全 / 绿网，未配置 AccessKey 时自动禁用）
+    aliyun_access_key_id: str = ""
+    aliyun_access_key_secret: str = ""
+    content_security_region: str = "cn-shanghai"
+    content_security_endpoint: str = "green-cip.cn-shanghai.aliyuncs.com"
+    guard_query_service: str = "llm_query_moderation"      # 输入护栏（检测提问）
+    guard_response_service: str = "llm_response_moderation"  # 输出护栏（检测回答）
+    guard_block_levels: str = "high,medium"  # 命中这些风险等级即拦截
+
     @classmethod
     def from_env(cls) -> "Config":
         return cls(
@@ -82,6 +91,19 @@ class Config:
             memory_top_k=int(os.getenv("MEMORY_TOP_K", "4")),
             memory_window=int(os.getenv("MEMORY_WINDOW", "3")),
             user_id=os.getenv("USER_ID", "default_user"),
+            aliyun_access_key_id=os.getenv("ALIBABA_CLOUD_ACCESS_KEY_ID", ""),
+            aliyun_access_key_secret=os.getenv("ALIBABA_CLOUD_ACCESS_KEY_SECRET", ""),
+            content_security_region=os.getenv("CONTENT_SECURITY_REGION", "cn-shanghai"),
+            content_security_endpoint=os.getenv(
+                "CONTENT_SECURITY_ENDPOINT", "green-cip.cn-shanghai.aliyuncs.com"
+            ),
+            guard_query_service=os.getenv(
+                "CONTENT_SECURITY_QUERY_SERVICE", "llm_query_moderation"
+            ),
+            guard_response_service=os.getenv(
+                "CONTENT_SECURITY_RESPONSE_SERVICE", "llm_response_moderation"
+            ),
+            guard_block_levels=os.getenv("CONTENT_SECURITY_BLOCK_LEVELS", "high,medium"),
         )
 
 
