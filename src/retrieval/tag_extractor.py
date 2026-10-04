@@ -1,67 +1,41 @@
-"""
-标签提取器
-从文本中提取结构化标签用于过滤
-"""
-import os
-import json
-from openai import OpenAI
-from src.config import DASHSCOPE_API_KEY, BASE_URL
+"""查询标签抽取：从用户问题中抽取一个知识点标签，用于标签检索。"""
+from typing import List, Optional
+
+from src.config import TAG_LIST, Config, settings
+from src.generation.llm import LLMClient
 
 
 class TagExtractor:
-    """标签提取器"""
-    
-    SYSTEM_PROMPT = """你是一个标签提取专家。请从文本中提取结构化信息，并按要求输出标签。
----
-【支持的标签类型】
-- 人名
-- 部门名称
-- 职位名称
-- 技术领域
-- 产品名称
----
-【输出要求】
-1. 请用 JSON 格式输出，如：[{"key": "部门名称", "value": "教研部"}]
-2. 如果某类标签未识别到，则不输出该类
----
-待分析文本如下：
+    """用 LLM 从问题中抽取知识点标签。"""
+
+    PROMPT = """\
+你是标签提取助手。请判断用户问题属于下面哪个知识点标签。
+
+可选标签（必须且只能从中选一个）：
+{tag_list}
+
+如果问题与这些标签都无关，输出：无
+
+只输出标签名称本身，不要输出任何解释、标点或多余文字。
+
+问题：{question}
 """
-    
-    def __init__(self, model: str = "qwen-turbo"):
-        """
-        Args:
-            model: 用于提取的模型
-        """
-        self.client = OpenAI(
-            api_key=DASHSCOPE_API_KEY,
-            base_url=BASE_URL
+
+    def __init__(
+        self,
+        llm_client: Optional[LLMClient] = None,
+        config: Optional[Config] = None,
+    ):
+        self.config = config or settings
+        self.llm_client = llm_client or LLMClient(self.config)
+
+    def extract(
+        self, question: str, tag_list: Optional[List[str]] = None
+    ) -> Optional[str]:
+        tag_list = tag_list or TAG_LIST
+        prompt = self.PROMPT.format(
+            tag_list="、".join(tag_list),
+            question=question,
         )
-        self.model = model
-    
-    def extract_tags(self, text: str) -> list:
-        """
-        从文本中提取标签
-        
-        Args:
-            text: 输入文本
-            
-        Returns:
-            标签列表
-        """
-        try:
-            completion = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {'role': 'system', 'content': self.SYSTEM_PROMPT},
-                    {'role': 'user', 'content': text}
-                ],
-                response_format={"type": "json_object"}
-            )
-            
-            result = completion.choices[0].message.content
-            tags = json.loads(result)
-            
-            return tags
-        except Exception as e:
-            print(f"⚠️ 标签提取失败: {e}")
-            return []
+        tag = self.llm_client.invoke(prompt).strip()
+        return tag if tag in tag_list else None

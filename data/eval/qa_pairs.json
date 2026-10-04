@@ -1,0 +1,26 @@
+[
+  {
+    "question": "RAG 的英文全称是什么？它主要解决大模型的什么问题？",
+    "ground_truth": "RAG 是 Retrieval Augmented Generation（检索增强生成），专门解决大模型知识不足的问题。"
+  },
+  {
+    "question": "RAG 建立索引包含哪几个步骤？",
+    "ground_truth": "包含四个步骤：文档解析、文本分段、文本向量化、存储索引。"
+  },
+  {
+    "question": "什么是上下文工程（Context Engineering）？",
+    "ground_truth": "上下文工程专注于为大模型的上下文窗口填充恰到好处的信息，以引导其完成特定任务。"
+  },
+  {
+    "question": "为什么向量语义检索能匹配到不含相同词汇的相关文档？",
+    "ground_truth": "因为 Embedding 模型能捕获语义相似性，即使文档中没有完全相同的词（如带薪假和年假），也能通过理解含义匹配到相关文档。"
+  },
+  {
+    "question": "结构化信息提取任务中，temperature 和 top_p 应该如何设置？",
+    "ground_truth": "两个参数都应调低，使模型集中选择高概率 Token，保证输出高度稳定。"
+  },
+  {
+    "question": "什么是句子窗口检索方案？",
+    "ground_truth": "用小块做检索定位，返回时自动扩展到周围几句话，兼顾定位精准和上下文完整。"
+  }
+]

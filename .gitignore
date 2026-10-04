@@ -1,39 +1,30 @@
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-*.egg
 *.egg-info/
 dist/
 build/
-*.binstar
+
+# 环境与密钥
 .env
-.venv
-env/
+.venv/
 venv/
 
 # IDE
 .vscode/
 .idea/
-*.swp
-*.swo
-*~
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Project specific
+# 项目本地产物
 knowledge_base/
 *.log
-data/docs/*.pdf
-data/docs/*.docx
-data/*.csv
-data/*.json
 
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# AI 
+# AI 助手
 .deep-copilot/
+
+
+
+test/

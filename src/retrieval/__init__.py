@@ -1,9 +1,6 @@
-"""
-检索模块
-"""
-from .retriever import Retriever
-from .query_rewriter import QueryRewriter
-from .tag_extractor import TagExtractor
-from .reranker import Reranker
+"""检索：融合式召回 + 标签抽取 + 重排序。"""
+from src.retrieval.retriever import FusionRetriever
+from src.retrieval.reranker import Reranker
+from src.retrieval.tag_extractor import TagExtractor
 
-__all__ = ["Retriever", "QueryRewriter", "TagExtractor", "Reranker"]
+__all__ = ["FusionRetriever", "Reranker", "TagExtractor"]

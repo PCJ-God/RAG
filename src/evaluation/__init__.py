@@ -1,6 +1,4 @@
-"""
-评测模块
-"""
-from .ragas_eval import RagasEvaluator
+"""评测：Ragas 自动化评测。"""
+from src.evaluation.evaluator import RagasEvaluator
 
 __all__ = ["RagasEvaluator"]

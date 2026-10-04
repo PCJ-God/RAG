@@ -1,8 +1,5 @@
-"""
-文档处理模块
-"""
-from .loader import DocumentLoader
-from .parser import DocumentParser
-from .splitter import SplitterFactory
+"""文档摄入：加载与分块。"""
+from src.document.loader import MarkdownLoader
+from src.document.splitter import QualitySplitter
 
-__all__ = ["DocumentLoader", "DocumentParser", "SplitterFactory"]
+__all__ = ["MarkdownLoader", "QualitySplitter"]

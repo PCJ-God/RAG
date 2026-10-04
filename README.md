@@ -1,339 +1,154 @@
-# RAG 智能问答系统
+# RAG 知识答疑助手
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+一个基于 **RAG（检索增强生成）** 的学习助手：对某个 RAG 知识点不清楚时直接提问，它会从课程知识库中检索相关内容，给出**带来源引用**的回答，帮助你学习而非闲聊。
 
-## 📖 项目简介
+## 项目定位
 
-本项目是一个基于 **RAG（检索增强生成）** 架构的企业级智能问答系统，源自阿里云大模型 ACP 认证课程的实践与扩展。面向教育内容开发公司场景，帮助新员工通过自然语言提问快速获取公司内部知识。
+- 回答的是「RAG 知识点不清晰」这类学习问题，不做通用聊天。
+- 知识库按主题分域管理，当前只有 `rag` 域，后续可自行添加 `agent` 等域，主流程无需改动。
+- **质量优先于功能数量**：只保留一条高质量基础链路（结构感知分块 → 融合式检索 → 重排序 → 带引用生成），不堆砌策略。
 
-项目从课程 Notebook 教学代码演进为**生产级 Python 包**，具备模块化架构、Web API 服务、自动化评测和多种检索优化策略。
+## 当前已实现的内容
 
-## ✨ 核心特性
+整条链路分 5 个阶段，每阶段对应一个 `src/` 子包：
 
-### 数据处理
-- **多格式文档解析**：PDF（DashScope 文档智能）/ Markdown / DOCX / TXT
-- **5 种分块策略**：Sentence / SentenceWindow / Semantic / Markdown / Token，支持 Ragas 对比评测
+| 阶段 | 模块 | 已实现内容 |
+| --- | --- | --- |
+| 文档摄入 | `document/` | Markdown 加载；结构感知分块（按标题层级切块、标题路径写入元数据、超长小节按句子二次切分、清洗 Notebook 导出的 HTML 噪声）；按文件名打知识点标签 |
+| 索引 | `indexing/` | `build / load / exists` 统一接口；本地 JSON 与 DashVector 两种后端；DashVector 直连官方 SDK（建 1024 维 collection + tag 字段、分批插入、异步删除后重建） |
+| 检索 | `retrieval/` | 融合式检索：语义 + 标签两路召回、合并去重；提问时先由 LLM 抽取知识点标签再按 `tag` 字段过滤；DashScope 原生 rerank 精排到 top-3，失败自动降级 LLM 精排 |
+| 生成 | `generation/` | LLM 走 DashScope OpenAI 兼容模式；强制只依据检索上下文回答、防幻觉；引用编号带文档名（如 `[1]（2_2_扩展答疑机器人的知识范围.md）`） |
+| 评测 | `evaluation/` | Ragas 评测，指标：`answer_correctness` / `faithfulness` / `context_recall` / `context_precision` |
 
-### 检索优化
-- **LLM 问题扩展**：将模糊/歧义问题改写为完整、无歧义的综合问题
-- **多步骤查询分解**：将复杂问题自动分解为多个子查询依次执行
-- **HyDE 假设文档嵌入**：生成假设答案文档来增强向量检索
-- **Rerank 重排序**：LLM 精排，先粗排 top-20 再精排 top-3
-- **标签过滤**：自动提取人名/部门/职位等结构化标签用于过滤
-
-### 对话与生成
-- **多轮对话**：CondenseQuestionChatEngine，自动理解上下文指代
-- **答案生成器**：支持流式输出和自定义 Prompt 模板
-- **Meta Prompting 提示词教练**：AI 裁判驱动，自动分析并优化提示词质量
-
-### 工程化
-- **Web API 服务**：FastAPI + 8 个 REST 端点 + SSE 流式输出
-- **CLI 交互界面**：支持多种策略开关
-- **自动化评测**：集成 Ragas 框架，一键对比不同策略效果
-- **Milvus 向量存储**：嵌入式本地持久化，无需 Docker
-
-## 🏗️ 系统架构
+## 系统架构
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        用户交互层                                │
-│  ┌──────────────┐  ┌──────────────┐                             │
-│  │  CLI 交互界面 │  │  Web API 服务 │                             │
-│  │ (run_qa.py)  │  │ (FastAPI)    │                             │
-│  └──────┬───────┘  └──────┬───────┘                             │
-└─────────┼────────────────┼──────────────────────────────────────┘
-          │                │
-┌─────────┼────────────────┼──────────────────────────────────────┐
-│         ▼       应用逻辑层        ▼                              │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐           │
-│  │  多轮对话引擎  │  │  查询优化器   │  │  答案生成器   │           │
-│  │ (CondenseQ)  │  │ (扩展/分解/  │  │ (LLM+Prompt) │           │
-│  │              │  │  HyDE)       │  │              │           │
-│  └──────────────┘  └──────┬───────┘  └──────┬───────┘           │
-│                           │                 │                    │
-│                    ┌──────┴───────┐         │                    │
-│                    │ Meta Prompting        │                    │
-│                    │ (Prompt Coach) │◄──────┘                    │
-│                    │ · 分析/优化提示词        │                    │
-│                    │ · AI 裁判自动判定        │                    │
-│                    └──────────────┘                              │
-└─────────┼────────────────┼──────────────────────────────────────┘
-          │                │
-┌─────────┼────────────────┼──────────────────────────────────────┐
-│         ▼       检索与存储层      ▼                              │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐           │
-│  │  向量检索     │  │  Rerank 模块  │  │  标签过滤器   │           │
-│  │ (Embedding)  │  │ (LLMRerank)  │  │ (Tag Filter) │           │
-│  └──────┬───────┘  └──────┬───────┘  └──────────────┘           │
-│         │                │                                       │
-│  ┌──────┴────────────────┴──────────────────────────┐            │
-│  │            向量索引与持久化                        │            │
-│  │    内存 (开发) / Milvus (本地) / DashVector (云)   │            │
-│  └───────────────────────────────────────────────────┘            │
-└────────────────────────┬─────────────────────────────────────────┘
-                         │
-┌────────────────────────┼─────────────────────────────────────────┐
-│                        ▼       数据处理层                         │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐            │
-│  │  文档加载器   │  │  文档解析器   │  │  分块策略模块  │            │
-│  │ (PDF/MD/DOCX)│  │(DashScope AI)│  │ (5 种方法)    │            │
-│  └──────────────┘  └──────────────┘  └──────────────┘            │
-└───────────────────────────────────────────────────────────────────┘
+document/ ──> indexing/ ──> retrieval/ ──> generation/ ──> evaluation/
+(加载+分块)   (构建/加载)   (融合检索+重排)  (LLM+提示词)    (Ragas)
+                └────────── pipeline.py 端到端编排 ──────────┘
 ```
 
-## 🚀 快速开始
+一次提问的完整过程：
 
-### 1. 环境准备
+1. 抽出问题对应的知识点标签（`TagExtractor`）。
+2. 语义检索 + 标签检索两路召回（`FusionRetriever`），合并去重。
+3. 重排序精排到 top-3（`Reranker`）。
+4. 把 top-3 文档块连同文件名、章节编号后拼进提示词，生成带引用的回答（`AnswerGenerator`）。
+
+## 快速开始
+
+1. 配置环境：`cp .env.example .env`，填入 `DASHSCOPE_API_KEY`（百炼平台获取）。
+2. 安装依赖：`pip install -r requirements.txt`。
+3. 构建索引：`python scripts/build_index.py`。
+4. 提问：`python scripts/ask.py "RAG 建立索引包括哪几步？"`。
+5. 评测：`python scripts/eval.py`。
+
+## 向量库
+
+默认用本地 JSON（`VECTOR_STORE=local`），零依赖、开箱即用。
+
+要用阿里云 DashVector，在 `.env` 中设置：
+
+```ini
+VECTOR_STORE=dashvector
+DASHSVECTOR_API_KEY=你的 DashVector API-KEY
+DASHSVECTOR_ENDPOINT=你的 DashVector endpoint
+```
+
+> 注意：DashVector 的 API-KEY 与百炼的 `DASHSCOPE_API_KEY` 是两套独立的，需在 DashVector 控制台单独获取。标签检索依赖 DashVector 的字段过滤能力，本地模式下自动跳过。
+
+## 配置说明（.env）
+
+```ini
+# 模型
+DASHSCOPE_API_KEY=        # 百炼 API Key（调用 LLM / Embedding / Rerank）
+LLM_MODEL=qwen-plus
+EMBEDDING_MODEL=text-embedding-v3
+RERANK_MODEL=qwen3-rerank
+
+# 分块
+CHUNK_SIZE=512
+CHUNK_OVERLAP=50
+
+# 检索：先粗排召回 TOP_K，再精排到 RERANK_TOP_N
+TOP_K=20
+RERANK_TOP_N=3
+
+# 生成
+TEMPERATURE=0.1           # 问答助手追求准确，建议 0~0.3
+MAX_TOKENS=1024
+
+# 向量库
+VECTOR_STORE=local        # local / dashvector
+DASHSVECTOR_API_KEY=
+DASHSVECTOR_ENDPOINT=
+DASHSVECTOR_COLLECTION=   # 留空则自动用 "<domain>_knowledge"
+DASHSVECTOR_DIM=1024      # text-embedding-v3 固定 1024，建库后不可改
+```
+
+知识点标签集合定义在 `src/config.py` 的 `TAG_MAP` 中，当前映射了课程 5 篇文档对应的标签；新文档若不在映射里，会归入「其他」。
+
+## 关键技术说明（踩坑记录）
+
+这些是调试过程中固化为代码实现的事实，后续改动时注意：
+
+1. **`sk-ws-` 开头的百炼 Key 只支持 OpenAI 兼容模式**：原生 `TextEmbedding` 接口会返回 `InvalidApiKey`。因此 LLM 与向量化都走 `/compatible-mode/v1`（`src/embedder.py`、`src/generation/llm.py`）；而 rerank 的原生接口接受该 Key，所以重排走 DashScope 原生。
+2. **兼容模式向量化单次最多 10 条文本**：见 `src/embedder.py` 的 `EMBED_BATCH_SIZE=10`。
+3. **DashVector 三个注意点**：维度 1024（建库后不可改）；`delete` 是异步的，`--rebuild` 采用「删除后重试 create」；公网访问需在控制台配置 IP 白名单，否则插入时报 `-2939 Cluster whiteList validate fail`。
+4. **`.env` 为权威来源**：`src/config.py` 使用 `load_dotenv(override=True)`，避免 shell 里残留的旧环境变量遮蔽 `.env`。
+5. **本地模式 embedding 的已知 bug 修复**：`create_embed_model()` 中对 `llama-index-embeddings-dashscope` 0.2.x 的 pydantic 私有属性 bug 做了手动补丁。
+
+## 命令速查
 
 ```bash
-git clone <your-repo-url>
-cd RAG
+# 构建索引
+python scripts/build_index.py                     # 构建默认域 rag
+python scripts/build_index.py --domain agent      # 构建其他知识域
+python scripts/build_index.py --rebuild           # 强制重建
 
-conda create -n rag_learn python=3.10
-conda activate rag_learn
-pip install -r requirements.txt
+# 提问
+python scripts/ask.py "RAG 建立索引包括哪几步？"
+python scripts/ask.py "..." --show-sources        # 展示来源清单（文件名/章节/分数/原文）
+python scripts/ask.py "..." --no-rerank           # 关闭重排序
+python scripts/ask.py "..." --no-tag              # 关闭标签检索
+python scripts/ask.py "..." --top-k 5             # 调整最终用于生成的块数
+python scripts/ask.py                            # 进入交互模式
+
+# 评测
+python scripts/eval.py
+python scripts/eval.py --qa-file data/eval/qa_pairs.json
 ```
 
-### 2. 配置 API Key
-
-```bash
-cp .env.example .env
-# 编辑 .env，填入 DashScope API Key
-```
-
-### 3. 构建索引
-
-```bash
-python scripts/build_index.py
-```
-
-### 4. 运行问答
-
-```bash
-# CLI 交互模式
-python scripts/run_qa.py
-
-# 直接提问
-python scripts/run_qa.py --question "张伟是哪个部门的"
-
-# 启用检索策略
-python scripts/run_qa.py --rerank          # Rerank 重排序
-python scripts/run_qa.py --hyde            # HyDE 假设文档
-python scripts/run_qa.py --query-expand    # LLM 问题扩展
-python scripts/run_qa.py --multistep       # 多步骤查询分解
-python scripts/run_qa.py --multi-turn      # 多轮对话模式
-```
-
-### 5. 启动 Web API
-
-```bash
-# 开发模式（auto-reload）
-PYTHONIOENCODING=utf-8 python -m uvicorn src.api.app:app --host 127.0.0.1 --port 8000 --reload
-
-# 生产模式
-PYTHONIOENCODING=utf-8 python -m uvicorn src.api.app:app --host 0.0.0.0 --port 8000 --workers 4
-```
-
-### 6. 运行评测
-
-```bash
-python scripts/run_eval.py              # 默认策略
-python scripts/run_eval.py --all        # 对比 4 种策略
-python scripts/run_eval.py --rerank     # 仅 Rerank
-python scripts/run_eval.py --hyde       # 仅 HyDE
-```
-
-## 📡 API 端点
-
-| 端点 | 方法 | 功能 |
-|------|------|------|
-| `GET /health` | GET | 健康检查 |
-| `POST /query` | POST | 单轮问答 |
-| `POST /query/stream` | POST (SSE) | 流式问答 |
-| `POST /chat` | POST | 多轮对话 |
-| `POST /chat/stream` | POST (SSE) | 流式多轮对话 |
-| `POST /retrieve` | POST | 纯检索 |
-| `POST /prompt-coach` | POST | 提示词教练 |
-| `GET /sessions` | GET | 列出会话 |
-| `DELETE /sessions/{id}` | DELETE | 删除会话 |
-
-### API 示例
-
-```bash
-# 单轮问答
-curl -X POST http://localhost:8000/query \
-  -H "Content-Type: application/json" \
-  -d '{"question": "张伟是哪个部门的？", "use_query_expand": true}'
-
-# 多轮对话
-curl -X POST http://localhost:8000/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message": "你好"}'
-
-# 提示词教练（AI 裁判驱动）
-curl -X POST http://localhost:8000/prompt-coach \
-  -H "Content-Type: application/json" \
-  -d '{"prompt": "你是一个客服", "mode": "auto", "max_iterations": 5}'
-```
-
-## 📁 项目结构
+## 目录结构
 
 ```
-RAG/
-├── README.md                    # 项目说明
-├── requirements.txt             # Python 依赖
-├── .env.example                 # 环境变量模板
-├── PROJECT_STRUCTURE.md         # 详细模块说明
-├── QUICKSTART.md                # 5 分钟快速开始
-│
-├── data/                        # 数据
-│   ├── docs/                    # 原始文档 (PDF/MD/DOCX)
-│   └── qa_pairs.json            # 测试问答对
-│
-├── src/                         # 核心代码 (9 个模块)
-│   ├── config.py                # 配置管理 (API Key/模型参数/RAG 配置)
-│   ├── document/                # 文档处理
-│   │   ├── loader.py            #   文档加载 (SimpleDirectoryReader)
-│   │   ├── parser.py            #   PDF 解析 (DashScopeParse)
-│   │   └── splitter.py          #   分块策略 (5 种方法)
-│   ├── embedding/               # 向量化
-│   │   └── embedder.py          #   Embedding 模型封装
-│   ├── storage/                 # 索引存储
-│   │   ├── vector_store.py      #   向量存储管理器 (Memory/Milvus)
-│   │   └── index_manager.py     #   索引生命周期管理
-│   ├── retrieval/               # 检索模块
-│   │   ├── retriever.py         #   基础检索器 (支持多种策略)
-│   │   ├── reranker.py          #   Rerank 后处理器
-│   │   ├── query_rewriter.py    #   查询改写 (Rewrite/HyDE/MultiStep)
-│   │   └── tag_extractor.py     #   标签提取 (人名/部门/职位)
-│   ├── generation/              # 答案生成
-│   │   ├── llm_client.py        #   LLM 客户端 (OpenAI 兼容)
-│   │   ├── answer_generator.py  #   答案生成器
-│   │   ├── prompt_templates.py  #   Prompt 模板管理
-│   │   └── prompt_coach.py      #   Meta Prompting 提示词教练
-│   ├── chat/                    # 多轮对话
-│   │   └── multi_turn_chat.py   #   CondenseQuestionChatEngine
-│   ├── evaluation/              # 自动化评测
-│   │   └── ragas_eval.py        #   Ragas 评测 (Answer Correctness/Context Recall/Precision)
-│   └── app/                     # 应用入口
-│       ├── cli.py               #   CLI 交互界面
-│       └── api/                 #   Web API 服务
-│           ├── app.py           #     FastAPI 应用 + 所有端点
-│           └── schemas.py       #     Pydantic 请求/响应模型
-│
-├── scripts/                     # 运行脚本
-│   ├── build_index.py           # 构建索引
-│   ├── run_qa.py                # 命令行问答
-│   ├── run_eval.py              # 自动化评测 (支持策略对比)
-│   └── meta_prompting.py        # 提示词教练 CLI
-│
-└── knowledge_base/              # 持久化索引存储 (自动生成)
+├── data/
+│   ├── knowledge/          # 知识库（按主题分域）
+│   │   └── rag/            # 当前域：RAG 课程笔记
+│   └── eval/               # 评测问答对
+├── src/
+│   ├── config.py           # 集中配置（.env 覆盖）+ 知识点标签
+│   ├── embedder.py         # 向量化（兼容模式，批量上限 10）
+│   ├── document/           # 文档加载 + 结构感知分块
+│   ├── indexing/           # 索引构建 / 加载
+│   ├── retrieval/          # 融合检索 + 标签抽取 + 重排序
+│   ├── generation/         # LLM 客户端 + 提示词 + 生成器
+│   ├── evaluation/         # Ragas 评测
+│   └── pipeline.py         # 端到端编排
+├── scripts/                # CLI 入口
+│   ├── build_index.py
+│   ├── ask.py
+│   └── eval.py
+├── requirements.txt
+├── .env.example
+└── knowledge_base/         # 本地索引持久化（gitignore）
 ```
 
-## 🧪 核心功能演示
+## 扩展新知识域
 
-### 基础 RAG 问答
+以 `agent` 为例，两步即可：
 
-```python
-from src.retrieval.retriever import Retriever
-from src.generation.answer_generator import AnswerGenerator
+1. 把文档放入 `data/knowledge/agent/`，并在 `src/config.py` 的 `TAG_MAP` 中补充该域文档对应的标签。
+2. `python scripts/build_index.py --domain agent`，再 `python scripts/ask.py "..." --domain agent`。
 
-retriever = Retriever()
-generator = AnswerGenerator()
-
-question = "我们公司项目管理应该用什么工具？"
-contexts = retriever.retrieve(question, top_k=3)
-answer = generator.generate(question, contexts)
-```
-
-### 多轮对话
-
-```python
-from src.chat.multi_turn_chat import CondenseQuestionChatEngine
-
-chat_engine = CondenseQuestionChatEngine()
-chat_engine.chat("张伟是哪个部门的？")     # 第一轮
-chat_engine.chat("他的联系方式是什么？")   # 自动理解"他"指代张伟
-```
-
-### Meta Prompting 提示词教练
-
-```python
-from src.generation.prompt_coach import PromptCoach
-
-coach = PromptCoach()
-
-# 固定迭代模式
-result = coach.coach("你是一个客服，回答问题要简短")
-
-# AI 裁判驱动模式（自动判断何时停止）
-result = coach.coach_auto("你是一个客服，回答问题要简短")
-print(result['judge_verdict'])   # "通过" / "不通过"
-print(result['iterations'])      # 实际迭代次数
-```
-
-### 检索策略对比评测
-
-```bash
-python scripts/run_eval.py --all
-```
-
-输出对比表：
-
-```
-策略对比结果
-------------------------------------------------------------
-策略                 | answer_correctness | context_recall | context_precision
-baseline             |           0.7115   |       0.5000   |          1.0000
-rerank               |           0.6580   |       0.0000   |          1.0000
-hyde                 |           0.6616   |       1.0000   |          1.0000
-rerank+hyde          |           0.6568   |       0.5000   |          0.0000
-```
-
-## 📊 评测指标
-
-| 指标 | 说明 | 优化方向 |
-|------|------|----------|
-| **Answer Correctness** | 答案正确性（语义相似度 + 事实准确度） | 优化 Prompt、升级 LLM |
-| **Context Recall** | 有多少相关文档被召回 | 升级 Embedding、改进分块 |
-| **Context Precision** | 召回文档中相关条目的排名 | Rerank、Query 改写 |
-
-## 🛠️ 技术栈
-
-| 类别 | 技术选型 |
-|------|----------|
-| **编程语言** | Python 3.10+ |
-| **LLM 框架** | LlamaIndex 0.11.0 |
-| **大模型** | Qwen-Max / Qwen-Plus / Qwen3-Thinking |
-| **Embedding** | DashScope text-embedding-v3 |
-| **向量存储** | 内存 (开发) / Milvus (本地) / DashVector (云) |
-| **Rerank** | LLMRerank (LLM 基于) |
-| **评测框架** | Ragas |
-| **Web 框架** | FastAPI + Uvicorn |
-
-## 📚 学习资源
-
-本项目基于 [阿里云大模型 ACP 认证课程](https://edu.aliyun.com/course/3130200) 开发：
-
-- [C2_构造问答系统](https://edu.aliyun.com/course/3130200/) — RAG 原理与实践
-- [C3_构建 Agent 系统](https://edu.aliyun.com/course/3130200/) — Agent 设计与开发
-- [C4_交付上线](https://edu.aliyun.com/course/3130200/) — 模型优化与上线
-
-## 🤝 贡献指南
-
-1. Fork 本仓库
-2. 创建特性分支 (`git checkout -b feature/amazing-feature`)
-3. 提交更改 (`git commit -m 'Add some amazing feature'`)
-4. 推送到分支 (`git push origin feature/amazing-feature`)
-5. 提交 Pull Request
-
-## 📄 许可证
-
-MIT 许可证，详见 [LICENSE](LICENSE) 文件。
-
-## 🙏 致谢
-
-- [LlamaIndex](https://www.llamaindex.ai/) — RAG 开发框架
-- [Ragas](https://docs.ragas.io/) — RAG 评测框架
-- [阿里云百炼](https://bailian.console.aliyun.com/) — 大模型服务平台
+主流程各阶段无需改动。

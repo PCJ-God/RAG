@@ -1,61 +1,42 @@
+"""重排序：把粗排结果精排到 top_n。
+
+优先使用 DashScope 专用 rerank 端点（qwen3-rerank），
+未安装对应包时回退到 LLM 打分精排（LLMRerank）。
 """
-重排序模块
-使用 LLM 对检索结果进行精排（LLMRerank）
-"""
-from llama_index.core.postprocessor import SimilarityPostprocessor
-from llama_index.core.postprocessor.llm_rerank import LLMRerank
+from typing import Any, List, Optional
+
 from llama_index.core.schema import NodeWithScore, QueryBundle
-from typing import List, Optional
-from src.generation.llm_client import LLMClient
+
+from src.config import Config, settings
 
 
 class Reranker:
-    """重排序器（工厂类）"""
+    """精排器。"""
 
-    def __init__(self, top_n: int = 3, use_rerank: bool = True, llm_client=None):
-        """
-        Args:
-            top_n: Rerank 后保留的文档数量
-            use_rerank: 是否启用 Rerank
-            llm_client: LLM 客户端实例（用于 LLMRerank）
-        """
-        self.top_n = top_n
-        self.use_rerank = use_rerank
-        self.llm_client = llm_client
+    def __init__(self, config: Optional[Config] = None, top_n: Optional[int] = None):
+        self.config = config or settings
+        self.top_n = top_n or self.config.rerank_top_n
+        self._postprocessor = self._build()
 
-    def get_postprocessor(self, use_rerank: bool = None, llm=None) -> list:
-        """
-        获取后处理器列表
+    def _build(self) -> Any:
+        try:
+            from llama_index.postprocessor.dashscope_rerank import DashScopeRerank
+        except ImportError:
+            return self._build_llm_rerank()
+        return DashScopeRerank(top_n=self.top_n, model=self.config.rerank_model)
 
-        Args:
-            use_rerank: 覆盖构造函数的 use_rerank 设置
-            llm: LLM 实例（可选，不传则自动创建）
+    def _build_llm_rerank(self):
+        from llama_index.core.postprocessor.llm_rerank import LLMRerank
 
-        Returns:
-            后处理器列表
-        """
-        postprocessors = []
-        enabled = use_rerank if use_rerank is not None else self.use_rerank
+        from src.generation.llm import LLMClient
 
-        if enabled:
-            # 使用 LlamaIndex 内置的 LLMRerank
-            rerank_llm = llm or (self.llm_client.get_llm() if self.llm_client else None)
-            if rerank_llm:
-                postprocessors.append(
-                    LLMRerank(
-                        llm=rerank_llm,
-                        top_n=self.top_n,
-                    )
-                )
-            else:
-                # 没有 LLM，fallback 到相似度过滤
-                postprocessors.append(
-                    SimilarityPostprocessor(similarity_cutoff=0.2)
-                )
-        else:
-            # fallback：相似度过滤
-            postprocessors.append(
-                SimilarityPostprocessor(similarity_cutoff=0.2)
-            )
+        return LLMRerank(llm=LLMClient(self.config).get_llm(), top_n=self.top_n)
 
-        return postprocessors
+    def rerank(
+        self, nodes: List[NodeWithScore], query: str
+    ) -> List[NodeWithScore]:
+        if not nodes:
+            return nodes
+        return self._postprocessor.postprocess_nodes(
+            nodes, query_bundle=QueryBundle(query)
+        )

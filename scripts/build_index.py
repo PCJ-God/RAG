@@ -1,66 +1,42 @@
-#!/usr/bin/env python
-"""
-构建索引脚本
+"""构建知识库索引。
+
+用法：
+    python scripts/build_index.py                 # 构建默认域 rag
+    python scripts/build_index.py --domain agent  # 构建其他知识域（后续自行添加）
+    python scripts/build_index.py --rebuild       # 强制重建
 """
 import sys
 from pathlib import Path
 
-# 添加项目根目录到sys.path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# 让脚本从任意目录运行时都能找到项目根目录下的 src 包
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.config import check_api_key, DOCS_DIR, CHUNK_SIZE, CHUNK_OVERLAP
-from src.document.loader import DocumentLoader
-from src.document.splitter import SplitterFactory
-from src.storage.index_manager import IndexManager
+import argparse
+
+from src.pipeline import RAGPipeline
 
 
 def main():
-    """主函数"""
-    check_api_key()
-    
-    print("=" * 60)
-    print("📚 开始构建索引...")
-    print("=" * 60)
-    
-    # 加载文档
-    loader = DocumentLoader(str(DOCS_DIR))
-    documents = loader.load()
-    
-    # 选择分块策略
-    print("\n选择分块策略:")
-    print("1. Sentence (默认)")
-    print("2. Sentence Window")
-    print("3. Semantic")
-    print("4. Markdown")
-    print("5. Token")
-    
-    choice = input("\n请选择 (1-5, 默认1): ").strip()
-    
-    if choice == '2':
-        splitter = SplitterFactory.create('window')
-    elif choice == '3':
-        print("⚠️ Semantic分块需要embed_model，请使用默认分块")
-        splitter = SplitterFactory.create('sentence', chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
-    elif choice == '4':
-        splitter = SplitterFactory.create('markdown')
-    elif choice == '5':
-        splitter = SplitterFactory.create('token', chunk_size=100, chunk_overlap=20)
+    parser = argparse.ArgumentParser(description="构建 RAG 知识库索引")
+    parser.add_argument(
+        "--domain", default="rag", help="知识域目录名（对应 data/knowledge/<domain>）"
+    )
+    parser.add_argument("--rebuild", action="store_true", help="强制重建索引")
+    args = parser.parse_args()
+
+    pipeline = RAGPipeline(domain=args.domain)
+
+    if pipeline.indexer.store_type == "dashvector":
+        where = f"DashVector collection「{pipeline.indexer.collection_name}」"
     else:
-        splitter = SplitterFactory.create('sentence', chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
-    
-    # 分块
-    print("\n正在分块...")
-    nodes = splitter.get_nodes_from_documents(documents)
-    print(f"✅ 分块完成，共 {len(nodes)} 个文档块")
-    
-    # 构建索引
-    index_manager = IndexManager()
-    index = index_manager.build_index(nodes, force_rebuild=True)
-    
-    print("\n" + "=" * 60)
-    print("✅ 索引构建完成！")
-    print(f"索引保存路径: {index_manager.persist_path}")
-    print("=" * 60)
+        where = str(pipeline.indexer.persist_dir)
+
+    if not args.rebuild and pipeline.indexer.exists():
+        print(f"索引已存在（{where}），如需重建请加 --rebuild")
+        return
+
+    count = pipeline.build(args.domain, rebuild=args.rebuild)
+    print(f"完成：共 {count} 个文档块，已存入 {where}")
 
 
 if __name__ == "__main__":

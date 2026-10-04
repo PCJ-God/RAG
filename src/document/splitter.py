@@ -1,94 +1,75 @@
+"""高质量分块：结构感知 + 单块大小上限 + 文本清洗 + 打标签。
+
+针对 Markdown 课程笔记（由 Notebook 导出）做了四点优化：
+1. 先按标题层级切成小节，并把标题路径写入每个块的 header_path 元数据；
+2. 超长小节再按句子二次切分，同时继承标题路径；
+3. 清洗 HTML 标签等导出噪声，减少对向量化的干扰；
+4. 按文档给每个块打上知识点标签（tag），用于后续标签检索。
 """
-分块策略模块
-支持多种文档分块方法
-"""
-from llama_index.core.node_parser import (
-    SentenceSplitter,
-    SemanticSplitterNodeParser,
-    SentenceWindowNodeParser,
-    MarkdownNodeParser,
-    TokenTextSplitter
-)
+import html
+import re
+from typing import List
+
 from llama_index.core import Document
-from typing import List, Optional
+from llama_index.core.node_parser import MarkdownNodeParser, SentenceSplitter
+from llama_index.core.schema import TextNode
+
+from src.config import get_tag
+
+_TAG_RE = re.compile(r"<[^>]+>")
+_SPACE_RE = re.compile(r"[ \t]+")
+_NEWLINE_RE = re.compile(r"\n{3,}")
 
 
-class SplitterFactory:
-    """分块策略工厂"""
-    
-    SPLITTERS = {
-        'sentence': 'sentence',
-        'window': 'sentence_window',
-        'semantic': 'semantic',
-        'markdown': 'markdown',
-        'token': 'token'
-    }
-    
-    @classmethod
-    def create(cls, splitter_type: str = 'sentence', **kwargs):
-        """
-        创建分块器
-        
-        Args:
-            splitter_type: 分块类型
-            **kwargs: 分块参数
-            
-        Returns:
-            分块器实例
-        """
-        if splitter_type == 'sentence':
-            return cls.create_sentence_splitter(**kwargs)
-        elif splitter_type == 'window':
-            return cls.create_sentence_window_splitter(**kwargs)
-        elif splitter_type == 'semantic':
-            return cls.create_semantic_splitter(**kwargs)
-        elif splitter_type == 'markdown':
-            return cls.create_markdown_splitter(**kwargs)
-        elif splitter_type == 'token':
-            return cls.create_token_splitter(**kwargs)
-        else:
-            raise ValueError(f"不支持的分块类型: {splitter_type}")
-    
-    @staticmethod
-    def create_sentence_splitter(chunk_size: int = 512, chunk_overlap: int = 50):
-        """句子分块器 - 默认策略"""
-        return SentenceSplitter(
+class QualitySplitter:
+    """结构感知分块器。"""
+
+    def __init__(self, chunk_size: int = 512, chunk_overlap: int = 50):
+        self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
+        self._section_parser = MarkdownNodeParser()
+        self._sub_splitter = SentenceSplitter(
             chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap
+            chunk_overlap=chunk_overlap,
         )
-    
+
+    def get_nodes(self, documents: List[Document]) -> List[TextNode]:
+        nodes: List[TextNode] = []
+        for doc in documents:
+            nodes.extend(self._split_document(doc))
+        print(f"[splitter] 共切分 {len(nodes)} 个文档块")
+        return nodes
+
+    def _split_document(self, doc: Document) -> List[TextNode]:
+        result: List[TextNode] = []
+        tag = get_tag(doc.metadata.get("file_name", ""))
+        sections = self._section_parser.get_nodes_from_documents([doc])
+
+        for section in sections:
+            text = self._clean(section.get_content())
+            if not text:
+                continue
+            meta = dict(section.metadata)
+            meta["tag"] = tag
+
+            if len(text) <= self.chunk_size:
+                section.set_content(text)
+                section.metadata = meta
+                result.append(section)
+            else:
+                # 超长小节再按句子切分，继承标题路径与标签等元数据
+                sub_nodes = self._sub_splitter.get_nodes_from_documents(
+                    [Document(text=text, metadata=meta)]
+                )
+                result.extend(sub_nodes)
+
+        return result
+
     @staticmethod
-    def create_sentence_window_splitter(window_size: int = 3):
-        """句子窗口分块器 - 保留上下文"""
-        return SentenceWindowNodeParser.from_defaults(
-            window_size=window_size,
-            window_metadata_key="window",
-            original_text_metadata_key="original_text"
-        )
-    
-    @staticmethod
-    def create_semantic_splitter(embed_model, buffer_size: int = 1, percentile_threshold: int = 95):
-        """语义分块器 - 按语义相关性分组"""
-        return SemanticSplitterNodeParser(
-            buffer_size=buffer_size,
-            breakpoint_percentile_threshold=percentile_threshold,
-            embed_model=embed_model
-        )
-    
-    @staticmethod
-    def create_markdown_splitter():
-        """Markdown分块器 - 按标题层级分割"""
-        return MarkdownNodeParser()
-    
-    @staticmethod
-    def create_token_splitter(chunk_size: int = 100, chunk_overlap: int = 20):
-        """Token分块器 - 按Token数量分割"""
-        return TokenTextSplitter(
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap
-        )
-    
-    @classmethod
-    def get_all_strategies(cls):
-        """获取所有可用的分块策略"""
-        return list(cls.SPLITTERS.keys())
+    def _clean(text: str) -> str:
+        text = _TAG_RE.sub(" ", text)
+        text = html.unescape(text)
+        text = text.replace("\u00a0", " ")
+        text = _SPACE_RE.sub(" ", text)
+        text = _NEWLINE_RE.sub("\n\n", text)
+        return text.strip()

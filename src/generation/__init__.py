@@ -1,9 +1,5 @@
-"""
-生成模块
-"""
-from .llm_client import LLMClient
-from .prompt_templates import PromptTemplates
-from .answer_generator import AnswerGenerator
-from .prompt_coach import PromptCoach
+"""生成：LLM 客户端、提示词与答案生成。"""
+from src.generation.generator import Answer, AnswerGenerator, Source
+from src.generation.llm import LLMClient
 
-__all__ = ["LLMClient", "PromptTemplates", "AnswerGenerator", "PromptCoach"]
+__all__ = ["Answer", "AnswerGenerator", "Source", "LLMClient"]
