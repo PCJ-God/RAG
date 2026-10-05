@@ -13,6 +13,7 @@ from src.generation.generator import Answer, AnswerGenerator, Source
 from src.generation.llm import LLMClient
 from src.indexing.indexer import Indexer, create_embed_model
 from src.retrieval.decomposer import QueryDecomposer
+from src.retrieval.intent_analyzer import IntentAnalyzer
 from src.retrieval.retriever import FusionRetriever
 from src.retrieval.reranker import Reranker
 from src.retrieval.rewriter import QueryRewriter
@@ -46,6 +47,7 @@ class RAGPipeline:
         self.tag_extractor = TagExtractor(self.llm_client, self.config)
         self.rewriter = QueryRewriter(self.llm_client)
         self.decomposer = QueryDecomposer(self.llm_client)
+        self.intent_analyzer = IntentAnalyzer(self.llm_client)
         self.guard = ContentGuard(self.config)
         self.retriever: Optional[FusionRetriever] = None
         self.reranker: Optional[Reranker] = None
@@ -103,9 +105,10 @@ class RAGPipeline:
         use_memory: bool = True,
         use_rewrite: bool = True,
         use_decompose: bool = True,
+        use_intent: bool = True,
         use_guard: bool = True,
     ) -> Answer:
-        """端到端问答：护栏 → 改写 → 拆解 → 检索 → 重排 → 生成 → 护栏 → 记忆。"""
+        """端到端问答：护栏 → 意图识别 → 改写/拆解 → 检索 → 重排 → 生成 → 护栏 → 记忆。"""
         # 输入护栏：拦截违规提问，不进入后续任何处理
         if use_guard:
             result = self.guard.check_input(question)
@@ -131,18 +134,39 @@ class RAGPipeline:
             profile_str = self._load_profile(question)
             history_str = self._load_history(question)
 
-        # 1) 模糊/指代问题改写（结合历史）
-        query_for_search = question
-        if use_rewrite:
-            query_for_search = self.rewriter.rewrite(question, history=history_str)
-            print(f"[rewrite] {query_for_search}")
+        # 意图识别：单意图 → 改写澄清；多意图 → 拆解（二者只走其一）
+        if use_intent:
+            is_multi = self.intent_analyzer.is_multi(question)
+            print(f"[intent] {'多意图' if is_multi else '单意图'}")
+            if is_multi:
+                sub_questions = (
+                    self.decomposer.decompose(question)
+                    if use_decompose
+                    else [question]
+                )
+            else:
+                query_for_search = question
+                if use_rewrite:
+                    query_for_search = self.rewriter.rewrite(
+                        question, history=history_str
+                    )
+                    print(f"[rewrite] {query_for_search}")
+                sub_questions = [query_for_search]
+        else:
+            # 未开启意图识别：沿用旧流程（改写 → 拆解）
+            query_for_search = question
+            if use_rewrite:
+                query_for_search = self.rewriter.rewrite(
+                    question, history=history_str
+                )
+                print(f"[rewrite] {query_for_search}")
+            sub_questions = (
+                self.decomposer.decompose(query_for_search)
+                if use_decompose
+                else [query_for_search]
+            )
 
-        # 2) 复杂问题拆解
-        sub_questions = [query_for_search]
-        if use_decompose:
-            sub_questions = self.decomposer.decompose(query_for_search)
-
-        # 3) 检索生成
+        # 检索生成
         if len(sub_questions) <= 1:
             answer = self._single_pass(
                 sub_questions[0],

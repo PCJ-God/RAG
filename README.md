@@ -21,7 +21,7 @@
 | --- | --- | --- | --- |
 | 文档摄入 | `document/` | 加载 Markdown、结构感知分块、打标签 | 文本分块 Chunking、元数据 Metadata、标签体系 |
 | 索引 | `indexing/` | 向量化并写入本地 / DashVector | Embedding、向量检索 ANN、向量库抽象 |
-| 检索 | `retrieval/` | 改写 → 拆解 → 标签 → 融合召回 → 重排 | 查询改写/扩展、指代消解、问题分解、多跳推理、混合检索、两阶段检索 Rerank |
+| 检索 | `retrieval/` | 意图识别 → 改写/拆解 → 标签 → 融合召回 → 重排 | 意图识别、查询改写/扩展、指代消解、问题分解、多跳推理、混合检索、两阶段检索 Rerank |
 | 生成 | `generation/` | 拼上下文 → 调 LLM → 带引用回答 | RAG 生成、上下文学习 ICL、提示词工程、防幻觉 Grounding |
 | 记忆 | `memory/` | 双层记忆读写 | 长短期记忆、滑动窗口、记忆语义召回、事实抽取 |
 | 安全护栏 | `safety/` | 输入/输出双向内容审核 | 内容安全、输入/输出护栏、fail-open/fail-closed |
@@ -54,14 +54,15 @@
 
 ### 3. 检索 `retrieval/`
 
-**过程（略）**：问题改写 → 复杂问题拆解 → 标签抽取 → 语义+标签两路召回 → 重排。
+**过程（略）**：意图识别 →（单意图走改写 / 多意图走拆解）→ 标签抽取 → 语义+标签两路召回 → 重排。
 
 **涉及的知识点**：
 
-- **查询改写 / 查询扩展（Query Rewriting / Expansion）**——`rewriter.py`：用户口语化的模糊问题（如 "RAG"）或含指代的问题（如 "那第二步呢"）直接拿去检索效果很差，先用 LLM 扩充成完整、明确的检索问题。
+- **意图识别（Intent Recognition）**——`intent_analyzer.py`：先判断问题含一个还是多个核心意图，作为后续分支的开关——单意图（哪怕模糊）只做改写澄清，多意图才拆解。避免"改写先扩成多意图、拆解再放大"的叠加失真。
+- **查询改写 / 查询扩展（Query Rewriting / Expansion）**——`rewriter.py`：对单意图问题，把口语化、模糊的表述澄清成一句明确的检索问题（不扩成多意图）。
 - **指代消解（Coreference Resolution）**——`rewriter.py`：把 "它""第二步" 这类指代结合对话历史还原成具体对象，这是多轮对话检索的关键难点。
-- **问题分解（Question Decomposition）与多跳推理（Multi-hop）**——`decomposer.py`：复杂问题（"建立索引和检索生成分别有哪些步骤？"）拆成多个子问题，每个子问题独立检索，最后 LLM 整合。本质是把"多跳问题"降成"单跳问题"逐个击破。
-- **意图识别 / 主题分类**——`tag_extractor.py`：用 LLM 把问题映射到有限标签集合（闭集分类），结果作为召回前的过滤条件，属于"先分类、后检索"的思路。
+- **问题分解（Question Decomposition）与多跳推理（Multi-hop）**——`decomposer.py`：只有确认存在多个并列意图时才拆成子问题，各自独立检索，最后 LLM 整合。本质是把"多跳问题"降成"单跳问题"逐个击破。
+- **主题分类（Tag Classification）**——`tag_extractor.py`：用 LLM 把问题映射到有限标签集合（闭集分类），结果作为召回前的过滤条件，属于"先分类、后检索"的思路。
 - **混合检索（Hybrid Retrieval）**——`retriever.py`：**语义路**（稠密向量相似度召回）+ **标签路**（按 `tag` 字段条件过滤）两路召回再合并去重。向量检索擅长"语义相近"，字段过滤擅长"精确限定"，两者互补。
 - **两阶段检索 / 重排序（Retrieve-then-Rerank）**——`reranker.py`：先用轻量模型粗排召回较多候选，再用更强的精排模型（`qwen3-rerank`，交叉编码器式打分）筛到 top-n。粗排管"召回率"，精排管"精确率"。
 
@@ -110,7 +111,7 @@
 
 ### 8. 编排 `pipeline.py`
 
-**过程（略）**：`query()` 串起 8 步——输入护栏 → 读记忆 → 改写 → 拆解 → 标签+召回 → 重排 → 生成 → 输出护栏 → 写回记忆。
+**过程（略）**：`query()` 串起——输入护栏 → 读记忆 → 意图识别 →（单意图改写 / 多意图拆解）→ 标签+召回 → 重排 → 生成 → 输出护栏 → 写回记忆。
 
 **涉及的知识点**：
 
@@ -191,6 +192,7 @@ python scripts/ask.py "..." --no-rerank       # 关闭重排
 python scripts/ask.py "..." --no-tag          # 关闭标签检索
 python scripts/ask.py "..." --no-rewrite      # 关闭改写
 python scripts/ask.py "..." --no-decompose    # 关闭拆解
+python scripts/ask.py "..." --no-intent       # 关闭意图识别
 python scripts/ask.py "..." --no-memory       # 关闭记忆
 python scripts/ask.py "..." --no-guard        # 关闭安全护栏
 python scripts/ask.py                         # 交互模式（自动开新会话）
@@ -210,7 +212,7 @@ python scripts/eval.py
 │   ├── embedder.py        # Embedding（LlamaIndex BaseEmbedding）
 │   ├── document/          # 加载 + 结构感知分块
 │   ├── indexing/          # 索引构建 / 加载
-│   ├── retrieval/         # 改写 / 拆解 / 标签 / 融合检索 / 重排
+│   ├── retrieval/         # 意图识别 / 改写 / 拆解 / 标签 / 融合检索 / 重排
 │   ├── generation/        # LLM 客户端 + 提示词 + 生成器
 │   ├── memory/            # 双层记忆存储 + 画像抽取
 │   ├── safety/            # AI 安全护栏

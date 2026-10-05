@@ -5,12 +5,14 @@
 """
 from typing import List, Optional
 
+import pandas as pd
 from datasets import Dataset
 from langchain_community.embeddings import DashScopeEmbeddings
 from langchain_community.llms.tongyi import Tongyi
 from ragas import evaluate
 from ragas.metrics import (
     answer_correctness,
+    answer_relevancy,
     context_precision,
     context_recall,
     faithfulness,
@@ -27,7 +29,7 @@ class RagasEvaluator:
         self.llm = Tongyi(model_name=self.config.llm_model)
         self.embeddings = DashScopeEmbeddings(model=self.config.embedding_model)
 
-    def evaluate(self, rows: List[dict]):
+    def evaluate(self, rows: List[dict]) -> pd.DataFrame:
         dataset = Dataset.from_dict(
             {
                 "question": [r["question"] for r in rows],
@@ -41,6 +43,7 @@ class RagasEvaluator:
             dataset,
             metrics=[
                 answer_correctness,
+                answer_relevancy,
                 faithfulness,
                 context_recall,
                 context_precision,
