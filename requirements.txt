@@ -1,11 +1,9 @@
 # RAG 框架
 llama-index==0.11.0
-llama-index-llms-dashscope==0.2.0
 llama-index-llms-openai-like>=0.2.0,<0.3.0
-llama-index-embeddings-dashscope==0.2.0
 llama-index-postprocessor-dashscope-rerank>=0.2.0
 
-# 模型调用
+# 模型调用（LLM 与 Embedding 统一走 OpenAI 兼容协议）
 openai>=1.30.0
 
 # 向量数据库
@@ -15,7 +13,7 @@ llama-index-vector-stores-dashvector==0.2.0
 # AI 安全护栏（阿里云内容安全 / 绿网）
 alibabacloud_green20220302==3.2.4
 
-# 评测
+# 评测（Ragas + langchain 的通义/DashScope 适配）
 ragas>=0.1.0,<0.2.0
 datasets>=2.14.0
 langchain-community>=0.0.20

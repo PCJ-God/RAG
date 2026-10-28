@@ -38,8 +38,8 @@
 
 **涉及的知识点**：
 
-- **文本分块（Chunking）**：检索和生成都以"块"为单位，块切得好不好直接决定召回质量。本项目不是固定字数硬切，而是**结构感知分块**——按标题层级切，保证每块语义完整；超长小节再按句子二次切；`chunk_overlap` 保留相邻块的重叠，防止语义在边界处被切断。
-- **元数据（Metadata）**：每块把「章节路径 header_path」「文件名」写入元数据，供生成阶段的引用标注与溯源使用——这是 RAG 里"答案可解释、可追溯"的数据基础。
+- **文本分块（Chunking）**：检索和生成都以"块"为单位，块切得好不好直接决定召回质量。本项目不是固定字数硬切，而是**结构感知分块**——按标题层级切，保证每块语义完整；超长小节再按语义断裂点二次切，仍超长的按句子硬切兜底；`chunk_overlap` 保留相邻块的重叠，防止语义在边界处被切断。
+- **元数据（Metadata）**：每块把「章节路径 header_path」「文件名」写入元数据，供生成阶段的引用标注与溯源使用——这是 RAG 里"答案可解释、可追溯"的数据基础。（当前 `header_path` 取不到值，见「已知问题」第 1 条。）
 - **标签体系（Tag）**：按文件名映射知识点标签（`TAG_MAP`），让"文档组织方式"与"提问分类方式"两端对齐，标签才能作为检索的过滤条件。
 
 ### 2. 索引 `indexing/`
@@ -144,10 +144,14 @@ RERANK_MODEL=qwen3-rerank
 # 分块
 CHUNK_SIZE=512
 CHUNK_OVERLAP=50
+SEMANTIC_BREAKPOINT_THRESHOLD=95   # 语义切分断裂点百分位
 
 # 检索：粗排 TOP_K，精排到 RERANK_TOP_N
 TOP_K=20
 RERANK_TOP_N=3
+
+# 追问澄清（仅交互式多轮会话）
+CLARIFY_MAX_ROUNDS=3
 
 # 生成
 TEMPERATURE=0.1
@@ -193,6 +197,7 @@ python scripts/ask.py "..." --no-tag          # 关闭标签检索
 python scripts/ask.py "..." --no-rewrite      # 关闭改写
 python scripts/ask.py "..." --no-decompose    # 关闭拆解
 python scripts/ask.py "..." --no-intent       # 关闭意图识别
+python scripts/ask.py "..." --no-clarify      # 关闭追问澄清
 python scripts/ask.py "..." --no-memory       # 关闭记忆
 python scripts/ask.py "..." --no-guard        # 关闭安全护栏
 python scripts/ask.py                         # 交互模式（自动开新会话）
@@ -206,23 +211,44 @@ python scripts/eval.py
 ## 目录结构
 
 ```
-├── data/knowledge/rag/    # 知识库（按主题分域）
+├── data/
+│   ├── knowledge/rag/     # 知识库（按主题分域，源数据只读）
+│   └── eval/              # 评测集 qa_pairs.json；评测产物不入库
+├── docs/                  # 项目文档（见下方「文档导航」）
 ├── src/
 │   ├── config.py          # 集中配置 + 知识点标签
 │   ├── embedder.py        # Embedding（LlamaIndex BaseEmbedding）
 │   ├── document/          # 加载 + 结构感知分块
-│   ├── indexing/          # 索引构建 / 加载
-│   ├── retrieval/         # 意图识别 / 改写 / 拆解 / 标签 / 融合检索 / 重排
+│   ├── indexing/          # 索引构建 / 加载 + DashVector 补丁
+│   ├── retrieval/         # 意图识别 / 改写 / 拆解 / 追问 / 标签 / 融合检索 / 重排
 │   ├── generation/        # LLM 客户端 + 提示词 + 生成器
 │   ├── memory/            # 双层记忆存储 + 画像抽取
 │   ├── safety/            # AI 安全护栏
 │   ├── evaluation/        # Ragas 评测
 │   └── pipeline.py        # 端到端编排
 ├── scripts/               # CLI 入口（build_index / ask / eval）
+│   └── data_prep/         # 一次性数据准备脚本（notebook → Markdown）
 ├── requirements.txt
 ├── .env.example
-└── knowledge_base/        # 本地索引持久化（gitignore）
+└── knowledge_base/        # 本地索引持久化（gitignore，跑 build_index 后生成）
 ```
+
+## 文档导航
+
+| 文档 | 内容 |
+| --- | --- |
+| `README.md`（本文） | 项目定位、知识地图、快速开始、配置与命令 |
+| `docs/系统工作流程.md` | 离线建库 + 在线问答的完整调用链，标注到函数级 |
+| `docs/设计讨论与改进路线.md` | 阶段评定（Modular）、已实测确认的缺陷、改进路线与待决策项 |
+| `docs/参考-企业级AI知识库架构.md` | 外部行业文章，企业级架构的参考视角，**不是本项目的设计文档** |
+
+## 已知问题
+
+上线前需要知道的三件事，逐条对应证据见 `docs/设计讨论与改进路线.md` 第三章：
+
+1. **`header_path` 恒为空**：`SimpleDirectoryReader` 对 `.md` 走的是 `MarkdownReader`，它在加载阶段就已按标题切分并剥离 `#`，导致后续 `MarkdownNodeParser` 空转、`header_path` 拿不到值。因此「引用溯源精确到小节」目前不成立，引用只到文件名。
+2. **`_clean()` 会误删语料内容**：`<[^>]+>` 正则会把 `<|endoftext|>`、`<|im_end|>` 这类字面量标记一并清空，涉及模型终止符的那段知识在索引里已被破坏。
+3. **评测指标只可信一半**：`data/eval/` 的 6 条样本里，4 条的 `faithfulness` 恰好为 `0`、`answer_correctness` 同时塌到 0.21~0.24（另 2 条为 0.82/0.88 与 0.97/0.48），两个指标成对失效，指向 Ragas 解析通义输出失败后按 0 兜底。`context_recall`（1.0）、`context_precision`（0.95）、`answer_relevancy`（0.92）三项稳定可用，但只反映「检索与问题匹配」，不反映「回答正确」。样本量仅 6 条，`eval.py` 不传 `session_id`，多轮与追问路径在评测中恒为关闭。
 
 ## 关键技术说明（踩坑记录）
 

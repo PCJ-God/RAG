@@ -1,3 +1,8 @@
+"""一次性数据准备脚本：把课程 notebook 批量转成 Markdown 语料。
+
+不属于主链路，也不被任何脚本导入。两个目录都是本机绝对路径，
+复用前请改成你自己的路径，输出目录建议指向 data/knowledge/rag。
+"""
 import os
 import nbformat
 from nbconvert import MarkdownExporter

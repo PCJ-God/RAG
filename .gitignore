@@ -22,9 +22,10 @@ Thumbs.db
 knowledge_base/
 *.log
 
-# AI 助手
+# 评测产物（每次 eval.py 重新生成，不入库）
+data/eval/results*.csv
+data/eval/results*.md
+
+# AI 助手临时目录
 .deep-copilot/
-
-
-
-test/
+.qwen/
