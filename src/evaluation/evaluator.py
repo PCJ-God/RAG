@@ -3,7 +3,7 @@
 输入 rows 为列表，每项包含：
     question / answer / contexts / ground_truth
 """
-from typing import List, Optional
+from typing import List, Optional, cast
 
 import pandas as pd
 from datasets import Dataset
@@ -26,7 +26,7 @@ class RagasEvaluator:
 
     def __init__(self, config: Optional[Config] = None):
         self.config = config or settings
-        self.llm = Tongyi(model_name=self.config.llm_model)
+        self.llm = Tongyi(model_name=self.config.llm_model)  # type: ignore[call-arg]
         self.embeddings = DashScopeEmbeddings(model=self.config.embedding_model)
 
     def evaluate(self, rows: List[dict]) -> pd.DataFrame:
@@ -51,4 +51,4 @@ class RagasEvaluator:
             llm=self.llm,
             embeddings=self.embeddings,
         )
-        return result.to_pandas()
+        return cast(pd.DataFrame, result.to_pandas())

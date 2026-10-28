@@ -37,6 +37,8 @@ class Config:
     # 分块
     chunk_size: int = 512
     chunk_overlap: int = 50
+    # 语义切分：相邻句向量相似度的断裂点百分位阈值（0-100，越大切得越少）
+    semantic_breakpoint_threshold: int = 95
 
     # 检索：先粗排召回 top_k 个候选，再精排到 rerank_top_n 个
     top_k: int = 20
@@ -59,6 +61,9 @@ class Config:
     memory_window: int = 3           # 最近 N 轮以纯文本形式直接带入
     user_id: str = "default_user"    # 单用户多会话；未来多用户可换
 
+    # 追问澄清：意图不明确时与用户交互补全问题（仅多轮会话启用）
+    clarify_max_rounds: int = 3
+
     # AI 安全护栏（阿里云内容安全 / 绿网，未配置 AccessKey 时自动禁用）
     aliyun_access_key_id: str = ""
     aliyun_access_key_secret: str = ""
@@ -78,6 +83,9 @@ class Config:
             rerank_model=os.getenv("RERANK_MODEL", "qwen3-rerank"),
             chunk_size=int(os.getenv("CHUNK_SIZE", "512")),
             chunk_overlap=int(os.getenv("CHUNK_OVERLAP", "50")),
+            semantic_breakpoint_threshold=int(
+                os.getenv("SEMANTIC_BREAKPOINT_THRESHOLD", "95")
+            ),
             top_k=int(os.getenv("TOP_K", "20")),
             rerank_top_n=int(os.getenv("RERANK_TOP_N", "3")),
             temperature=float(os.getenv("TEMPERATURE", "0.1")),
@@ -91,6 +99,7 @@ class Config:
             memory_top_k=int(os.getenv("MEMORY_TOP_K", "4")),
             memory_window=int(os.getenv("MEMORY_WINDOW", "3")),
             user_id=os.getenv("USER_ID", "default_user"),
+            clarify_max_rounds=int(os.getenv("CLARIFY_MAX_ROUNDS", "3")),
             aliyun_access_key_id=os.getenv("ALIBABA_CLOUD_ACCESS_KEY_ID", ""),
             aliyun_access_key_secret=os.getenv("ALIBABA_CLOUD_ACCESS_KEY_SECRET", ""),
             content_security_region=os.getenv("CONTENT_SECURITY_REGION", "cn-shanghai"),

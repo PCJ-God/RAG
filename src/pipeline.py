@@ -2,7 +2,7 @@
 
 检索阶段为融合式：语义检索 + 标签检索 两路召回，合并去重后交给重排。
 """
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 from llama_index.core import Settings
 
@@ -12,6 +12,7 @@ from src.document.splitter import QualitySplitter
 from src.generation.generator import Answer, AnswerGenerator, Source
 from src.generation.llm import LLMClient
 from src.indexing.indexer import Indexer, create_embed_model
+from src.retrieval.clarifier import Clarifier
 from src.retrieval.decomposer import QueryDecomposer
 from src.retrieval.intent_analyzer import IntentAnalyzer
 from src.retrieval.retriever import FusionRetriever
@@ -48,6 +49,7 @@ class RAGPipeline:
         self.rewriter = QueryRewriter(self.llm_client)
         self.decomposer = QueryDecomposer(self.llm_client)
         self.intent_analyzer = IntentAnalyzer(self.llm_client)
+        self.clarifier = Clarifier(self.llm_client, self.config)
         self.guard = ContentGuard(self.config)
         self.retriever: Optional[FusionRetriever] = None
         self.reranker: Optional[Reranker] = None
@@ -68,6 +70,7 @@ class RAGPipeline:
         splitter = QualitySplitter(
             chunk_size=self.config.chunk_size,
             chunk_overlap=self.config.chunk_overlap,
+            breakpoint_percentile_threshold=self.config.semantic_breakpoint_threshold,
         )
         nodes = splitter.get_nodes(documents)
 
@@ -107,8 +110,10 @@ class RAGPipeline:
         use_decompose: bool = True,
         use_intent: bool = True,
         use_guard: bool = True,
+        use_clarify: bool = True,
+        clarify_callback: Optional[Callable[[str], str]] = None,
     ) -> Answer:
-        """端到端问答：护栏 → 意图识别 → 改写/拆解 → 检索 → 重排 → 生成 → 护栏 → 记忆。"""
+        """端到端问答：护栏 → 意图识别(改写/拆解/追问) → 检索 → 重排 → 生成 → 护栏 → 记忆。"""
         # 输入护栏：拦截违规提问，不进入后续任何处理
         if use_guard:
             result = self.guard.check_input(question)
@@ -134,21 +139,50 @@ class RAGPipeline:
             profile_str = self._load_profile(question)
             history_str = self._load_history(question)
 
-        # 意图识别：单意图 → 改写澄清；多意图 → 拆解（二者只走其一）
+        # 意图识别三分类：单意图→改写澄清；多意图→拆解；需追问→交互澄清（仅多轮会话启用）
         if use_intent:
-            is_multi = self.intent_analyzer.is_multi(question)
-            print(f"[intent] {'多意图' if is_multi else '单意图'}")
-            if is_multi:
+            intent = self.intent_analyzer.classify(question, history=history_str)
+            print(f"[intent] {intent}")
+
+            if intent == "需追问":
+                merged = question
+                clarify_on = (
+                    use_clarify
+                    and self.session_id is not None
+                    and clarify_callback is not None
+                )
+                rounds = 0
+                while clarify_on and rounds < self.config.clarify_max_rounds:
+                    followup = self.clarifier.ask(merged)
+                    print(f"[clarify] {followup}")
+                    reply = clarify_callback(followup)
+                    if not reply or not reply.strip():
+                        break  # 用户放弃补充，结束追问
+                    merged = f"{merged}\n【追问】{followup}\n【补充】{reply.strip()}"
+                    rounds += 1
+                    intent = self.intent_analyzer.classify(
+                        merged, history=history_str
+                    )
+                    print(f"[intent] {intent}")
+                    if intent != "需追问":
+                        break
+                if intent == "需追问":
+                    intent = "单意图"  # 超限或放弃：强制改写兜底（宁答不错）
+                search_question = merged
+            else:
+                search_question = question
+
+            if intent == "多意图":
                 sub_questions = (
-                    self.decomposer.decompose(question)
+                    self.decomposer.decompose(search_question)
                     if use_decompose
-                    else [question]
+                    else [search_question]
                 )
             else:
-                query_for_search = question
+                query_for_search = search_question
                 if use_rewrite:
                     query_for_search = self.rewriter.rewrite(
-                        question, history=history_str
+                        query_for_search, history=history_str
                     )
                     print(f"[rewrite] {query_for_search}")
                 sub_questions = [query_for_search]

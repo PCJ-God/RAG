@@ -45,6 +45,7 @@ def main():
     parser.add_argument("--no-rewrite", action="store_true", help="关闭问题改写")
     parser.add_argument("--no-decompose", action="store_true", help="关闭问题拆解")
     parser.add_argument("--no-intent", action="store_true", help="关闭意图识别")
+    parser.add_argument("--no-clarify", action="store_true", help="关闭追问澄清")
     parser.add_argument("--no-guard", action="store_true", help="关闭安全护栏")
     args = parser.parse_args()
 
@@ -56,6 +57,13 @@ def main():
     pipeline = RAGPipeline(domain=args.domain, session_id=session_id).load()
 
     def ask(question: str):
+        def clarify_callback(followup: str) -> str:
+            print(f"\n追问：{followup}")
+            try:
+                return input("补充：").strip()
+            except (EOFError, KeyboardInterrupt):
+                return ""
+
         return pipeline.query(
             question,
             top_k=args.top_k,
@@ -66,6 +74,8 @@ def main():
             use_decompose=not args.no_decompose,
             use_intent=not args.no_intent,
             use_guard=not args.no_guard,
+            use_clarify=not args.no_clarify,
+            clarify_callback=clarify_callback,
         )
 
     if args.question:

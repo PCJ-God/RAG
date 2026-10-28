@@ -11,10 +11,15 @@ import re
 from typing import List
 
 from llama_index.core import Document
-from llama_index.core.node_parser import MarkdownNodeParser, SentenceSplitter
+from llama_index.core.node_parser import (
+    MarkdownNodeParser,
+    SemanticSplitterNodeParser,
+    SentenceSplitter,
+)
 from llama_index.core.schema import TextNode
 
 from src.config import get_tag
+from src.embedder import CompatibleEmbedding
 
 _TAG_RE = re.compile(r"<[^>]+>")
 _SPACE_RE = re.compile(r"[ \t]+")
@@ -24,10 +29,22 @@ _NEWLINE_RE = re.compile(r"\n{3,}")
 class QualitySplitter:
     """结构感知分块器。"""
 
-    def __init__(self, chunk_size: int = 512, chunk_overlap: int = 50):
+    def __init__(
+        self,
+        chunk_size: int = 512,
+        chunk_overlap: int = 50,
+        breakpoint_percentile_threshold: int = 95,
+        embed_model=None,
+    ):
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
         self._section_parser = MarkdownNodeParser()
+        self._semantic_splitter = SemanticSplitterNodeParser(
+            buffer_size=1,
+            breakpoint_percentile_threshold=breakpoint_percentile_threshold,
+            embed_model=embed_model or CompatibleEmbedding(),
+        )
+        # 硬上限兜底：语义切分后仍超长的块再按句子切
         self._sub_splitter = SentenceSplitter(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
@@ -62,13 +79,28 @@ class QualitySplitter:
                 section.metadata = meta
                 result.append(section)
             else:
-                # 超长小节再按句子切分，继承标题路径与标签等元数据
-                sub_nodes = self._sub_splitter.get_nodes_from_documents(
+                # 超长小节按语义切分（相邻句向量相似度断裂点），继承标题路径与标签等元数据
+                sub_nodes = self._semantic_splitter.get_nodes_from_documents(
                     [Document(text=text, metadata=meta)]
                 )
-                result.extend(sub_nodes)
+                result.extend(self._enforce_cap(sub_nodes))
 
         return result
+
+    def _enforce_cap(self, nodes: List[TextNode]) -> List[TextNode]:
+        """语义切分可能产生超长块，超上限的再按句子硬切兜底。"""
+        final: List[TextNode] = []
+        for node in nodes:
+            content = node.get_content()
+            if len(content) <= self.chunk_size:
+                final.append(node)
+            else:
+                final.extend(
+                    self._sub_splitter.get_nodes_from_documents(
+                        [Document(text=content, metadata=node.metadata)]
+                    )
+                )
+        return final
 
     @staticmethod
     def _clean(text: str) -> str:
